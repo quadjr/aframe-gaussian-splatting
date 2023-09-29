@@ -139,12 +139,6 @@ AFRAME.registerComponent("3d_gaussian_splatting", {
 					-(u_buffer[32 * i + 28 + 3] - 128) / 128.0,
 					(u_buffer[32 * i + 28 + 0] - 128) / 128.0,
 				);
-				let quat2 = new THREE.Quaternion(
-					(u_buffer[32 * i + 28 + 0] - 128) / 128.0,
-					(u_buffer[32 * i + 28 + 1] - 128) / 128.0,
-					(u_buffer[32 * i + 28 + 2] - 128) / 128.0,
-					(u_buffer[32 * i + 28 + 3] - 128) / 128.0,
-				);
 				let center = new THREE.Vector3(
 					f_buffer[8 * i + 0],
 					f_buffer[8 * i + 1],
