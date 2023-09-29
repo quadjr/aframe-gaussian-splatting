@@ -13,7 +13,7 @@ AFRAME.registerComponent("3d_gaussian_splatting", {
 			const camera_el = document.getElementById("camera");
 			const focal = (size.y / 2.0) / Math.tan(camera_el.components.camera.data.fov / 2.0 * Math.PI / 180.0);
 
-			const geometry = new THREE.PlaneGeometry( 2, 2);
+			const geometry = new THREE.PlaneGeometry( 4, 4);
 			const material = new THREE.ShaderMaterial( {
 				uniforms : {
 					"viewport": {value: new Float32Array([size.x, size.y])},
@@ -21,65 +21,68 @@ AFRAME.registerComponent("3d_gaussian_splatting", {
 				},
 				vertexShader: `
 					varying vec4 vColor;
-					varying vec3 vConic;
-					varying vec2 vCenter;
+					varying vec2 vPosition;
 					uniform vec2 viewport;
 					uniform float focal;
 
-					vec3 compute_cov2d(vec4 center){
-						mat3 Vrk = mat3(instanceMatrix);
-						vec4 t = modelViewMatrix * center;
-						vec2 lims = 1.3 * 0.5 * viewport / focal;
-						t.xy = min(lims, max(-lims, t.xy / t.z)) * t.z;
-						mat3 J = mat3(
-							focal / t.z, 0., -(focal * t.x) / (t.z * t.z), 
-							0., focal / t.z, -(focal * t.y) / (t.z * t.z), 
-							0., 0., 0.
-						);
-						mat3 W = transpose(mat3(modelViewMatrix));
-						mat3 T = W * J;
-						mat3 cov = transpose(T) * transpose(Vrk) * T;
-						return vec3(cov[0][0] + 0.3, cov[0][1], cov[1][1] + 0.3);
-					}
-		
 					void main () {
 						vec4 center = vec4(instanceMatrix[3][0], instanceMatrix[3][1], instanceMatrix[3][2], 1);
+
 						vec4 camspace = modelViewMatrix * center;
 						vec4 pos2d = projectionMatrix * mat4(1,0,0,0,0,-1,0,0,0,0,1,0,0,0,0,1)  * camspace;
 											
-						vec3 cov2d = compute_cov2d(center);
-						float det = cov2d.x * cov2d.z - cov2d.y * cov2d.y;
-						vec3 conic = vec3(cov2d.z, cov2d.y, cov2d.x) / det;
-						float mid = 0.5 * (cov2d.x + cov2d.z);
-						float lambda1 = mid + sqrt(max(0.1, mid * mid - det));
-						float lambda2 = mid - sqrt(max(0.1, mid * mid - det));
-						vec2 v1 = 7.0 * sqrt(lambda1) * normalize(vec2(cov2d.y, lambda1 - cov2d.x));
-						vec2 v2 = 7.0 * sqrt(lambda2) * normalize(vec2(-(lambda1 - cov2d.x),cov2d.y));
-						
+						float bounds = 1.2 * pos2d.w;
+						if (pos2d.z < -pos2d.w || pos2d.x < -bounds || pos2d.x > bounds
+							|| pos2d.y < -bounds || pos2d.y > bounds) {
+							gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+							return;
+						}
+
+						mat3 J = mat3(
+							focal / camspace.z, 0., -(focal * camspace.x) / (camspace.z * camspace.z), 
+							0., -focal / camspace.z, (focal * camspace.y) / (camspace.z * camspace.z), 
+							0., 0., 0.
+						);
+
+						mat3 W = transpose(mat3(modelViewMatrix));
+						mat3 T = W * J;
+						mat3 cov = transpose(T) * mat3(instanceMatrix) * T;
+
+						vec2 vCenter = vec2(pos2d) / pos2d.w;
+
+						float diagonal1 = cov[0][0] + 0.3;
+						float offDiagonal = cov[0][1];
+						float diagonal2 = cov[1][1] + 0.3;
+
+						float mid = 0.5 * (diagonal1 + diagonal2);
+						float radius = length(vec2((diagonal1 - diagonal2) / 2.0, offDiagonal));
+						float lambda1 = mid + radius;
+						float lambda2 = max(mid - radius, 0.1);
+						vec2 diagonalVector = normalize(vec2(offDiagonal, lambda1 - diagonal1));
+						vec2 v1 = min(sqrt(2.0 * lambda1), 1024.0) * diagonalVector;
+						vec2 v2 = min(sqrt(2.0 * lambda2), 1024.0) * vec2(diagonalVector.y, -diagonalVector.x);
+
 						float r = floor(instanceColor.r * 255.0)/255.0;
 						float a = (instanceColor.r - r)*256.0;
 						vColor = vec4(r, instanceColor.g, instanceColor.b, a);
-						vConic = conic;
-						vCenter = vec2(pos2d) / pos2d.w;
-					
-						gl_Position = vec4(vec2(vCenter + position.x * (position.x * position.y < 0.0 ? v1 : v2) / viewport), pos2d.z / pos2d.w, 1);
+						vPosition = position.xy;
+
+						gl_Position = vec4(
+							vCenter 
+								+ position.x * v2 / viewport * 2.0 
+								+ position.y * v1 / viewport * 2.0, 0.0, 1.0);
+
 					}
 					`,
 				fragmentShader:  `
 					varying vec4 vColor;
-					varying vec3 vConic;
-					varying vec2 vCenter;
-					uniform vec2 viewport;
+					varying vec2 vPosition;
 
 					void main () {    
-						vec2 d = (vCenter - 2.0 * (gl_FragCoord.xy/viewport - vec2(0.5, 0.5))) * viewport * 0.5;
-						float power = -0.5 * (vConic.x * d.x * d.x + vConic.z * d.y * d.y) - vConic.y * d.x * d.y;
-						if (power > 0.0) discard;
-						float alpha = min(0.99, vColor.a * exp(power));
-						if(alpha < 0.02) discard;
-
-						gl_FragColor = vec4(alpha * vColor.rgb, alpha);
-						// gl_FragColor = vec4(1,0,0,1);
+						float A = -dot(vPosition, vPosition);
+						if (A < -4.0) discard;
+						float B = exp(A) * vColor.a;
+						gl_FragColor = vec4(B * vColor.rgb, B);
 					}
 					`
 			} );
