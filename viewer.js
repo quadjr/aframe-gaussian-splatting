@@ -71,7 +71,6 @@ AFRAME.registerComponent("3d_gaussian_splatting", {
 							vCenter 
 								+ position.x * v2 / viewport * 2.0 
 								+ position.y * v1 / viewport * 2.0, 0.0, 1.0);
-
 					}
 					`,
 				fragmentShader:  `
@@ -96,8 +95,7 @@ AFRAME.registerComponent("3d_gaussian_splatting", {
 			material.depthTest = false;
 			material.needsUpdate = true;
 
-
-			window.addEventListener('resize', () => {				
+			window.addEventListener('resize', () => {
 				let size = new THREE.Vector2();
 				this.el.sceneEl.renderer.getSize(size);
 				const camera_el = document.getElementById("camera");
