@@ -1,3 +1,61 @@
+function sortSplats(matrices, view){
+	const vertexCount = matrices.length/16;
+
+	let maxDepth = -Infinity;
+	let minDepth = Infinity;
+	let depthList = new Float32Array(vertexCount);
+	let sizeList = new Int32Array(depthList.buffer);
+	for (let i = 0; i < vertexCount; i++) {
+		let depth =
+			((view[0] * matrices[i * 16 + 12] +
+				view[1] * matrices[i * 16 + 13] -
+				view[2] * matrices[i * 16 + 14]));
+		depthList[i] = depth;
+		if (depth > maxDepth) maxDepth = depth;
+		if (depth < minDepth) minDepth = depth;
+	}
+
+	// This is a 16 bit single-pass counting sort
+	let depthInv = (256 * 256 - 1) / (maxDepth - minDepth);
+	let counts0 = new Uint32Array(256*256);
+	for (let i = 0; i < vertexCount; i++) {
+		sizeList[i] = ((depthList[i] - minDepth) * depthInv) | 0;
+		counts0[sizeList[i]]++;
+	}
+	let starts0 = new Uint32Array(256*256);
+	for (let i = 1; i < 256*256; i++) starts0[i] = starts0[i - 1] + counts0[i - 1];
+	let depthIndex = new Uint32Array(vertexCount);
+	for (let i = 0; i < vertexCount; i++) depthIndex[starts0[sizeList[i]]++] = i;
+
+	let sortedMatrices = new Float32Array(vertexCount * 16);
+	for (let j = 0; j < vertexCount; j++) {
+		let i = depthIndex[j];
+		for(let k = 0; k < 16; k++){
+			sortedMatrices[j * 16 + k] = matrices[i * 16 + k];
+		}
+	}
+
+	return sortedMatrices;
+}
+
+function createWorker(self) {
+	let sortFunction;
+	let matrices;
+	self.onmessage = (e) => {
+		if(e.data.sortFunction){
+			eval(e.data.sortFunction);
+			sortFunction = sortSplats;
+		}
+		if(e.data.matrices){
+			matrices = new Float32Array(e.data.matrices);
+		}
+		if(e.data.view){
+			const view = new Float32Array(e.data.view);	
+			const sortedMatrices = sortFunction(matrices, view);
+			self.postMessage({sortedMatrices}, [sortedMatrices.buffer]);
+		}
+	};
+}
 
 AFRAME.registerComponent("3d_gaussian_splatting", {
 	init: function () {
@@ -62,9 +120,7 @@ AFRAME.registerComponent("3d_gaussian_splatting", {
 						vec2 v1 = min(sqrt(2.0 * lambda1), 1024.0) * diagonalVector;
 						vec2 v2 = min(sqrt(2.0 * lambda2), 1024.0) * vec2(diagonalVector.y, -diagonalVector.x);
 
-						float r = floor(instanceColor.r * 255.0)/255.0;
-						float a = (instanceColor.r - r)*256.0;
-						vColor = vec4(r, instanceColor.g, instanceColor.b, a);
+						vColor = vec4(instanceMatrix[0][3], instanceMatrix[1][3], instanceMatrix[2][3], instanceMatrix[3][3]);
 						vPosition = position.xy;
 
 						gl_Position = vec4(
@@ -73,11 +129,11 @@ AFRAME.registerComponent("3d_gaussian_splatting", {
 								+ position.y * v1 / viewport * 2.0, 0.0, 1.0);
 					}
 					`,
-				fragmentShader:  `
+				fragmentShader: `
 					varying vec4 vColor;
 					varying vec2 vPosition;
 
-					void main () {    
+					void main () {
 						float A = -dot(vPosition, vPosition);
 						if (A < -4.0) discard;
 						float B = exp(A) * vColor.a;
@@ -109,30 +165,9 @@ AFRAME.registerComponent("3d_gaussian_splatting", {
 			let vertexCount = Math.floor(buffer.byteLength / rowLength);
 			const f_buffer = new Float32Array(buffer);
 			const u_buffer = new Uint8Array(buffer);
-
-			let depthMix = new BigInt64Array(vertexCount);
-			const indexMix = new Uint32Array(depthMix.buffer);
-			for (let j = 0; j < vertexCount; j++) {
-				indexMix[2 * j] = j;
-			}
-
-			const floatMix = new Float32Array(depthMix.buffer);
-			const view = camera_el.object3D.matrixWorld;
-
-			for (let j = 0; j < vertexCount; j++) {
-				let i = indexMix[2 * j];
-				floatMix[2 * j + 1] =
-					10000 +
-					view.elements[2] * f_buffer[8 * i + 0] +
-					view.elements[6] * f_buffer[8 * i + 1] +
-					view.elements[10] * f_buffer[8 * i + 2];
-			}
-
-			depthMix.sort();
-
-			let iMesh = new THREE.InstancedMesh(geometry, material, vertexCount);
-			for (let j = 0; j < vertexCount; j++) {
-				const i = indexMix[2 * j];
+			
+			let matrices = new Float32Array(vertexCount * 16);
+			for (let i = 0; i < vertexCount; i++) {
 				let quat = new THREE.Quaternion(
 					(u_buffer[32 * i + 28 + 1] - 128) / 128.0,
 					(u_buffer[32 * i + 28 + 2] - 128) / 128.0,
@@ -144,11 +179,6 @@ AFRAME.registerComponent("3d_gaussian_splatting", {
 					f_buffer[8 * i + 1],
 					-f_buffer[8 * i + 2]
 				);
-				let color = new THREE.Color(
-					u_buffer[32 * i + 24 + 0] / 255 + u_buffer[32 * i + 24 + 3] / 255 / 256.0,
-					u_buffer[32 * i + 24 + 1] / 255,
-					u_buffer[32 * i + 24 + 2] / 255,
-				);
 				let scale = new THREE.Vector3(
 					f_buffer[8 * i + 3 + 0],
 					f_buffer[8 * i + 3 + 1],
@@ -159,23 +189,58 @@ AFRAME.registerComponent("3d_gaussian_splatting", {
 				mtx.makeRotationFromQuaternion(quat);
 				mtx.transpose();
 				mtx.scale(scale);
-				mtx.transpose();
-
 				let mtx_t = mtx.clone()
-				mtx_t.transpose();
+				mtx.transpose();
 				mtx.premultiply(mtx_t);
-
 				mtx.setPosition(center);
-				iMesh.setMatrixAt(j, mtx)
-				iMesh.setColorAt(j, color);
+
+				// RGBA
+				mtx.elements[3] = u_buffer[32 * i + 24 + 0] / 255;
+				mtx.elements[7] = u_buffer[32 * i + 24 + 1] / 255;
+				mtx.elements[11] = u_buffer[32 * i + 24 + 2] / 255;
+				mtx.elements[15] = u_buffer[32 * i + 24 + 3] / 255;
+
+				for(let j = 0; j < 16; j++){
+					matrices[i * 16 + j] = mtx.elements[j];
+				}
 			}
 
-			iMesh.frustumCulled = false;
-			iMesh.instanceMatrix.needsUpdate = true;
-			iMesh.instanceColor.needsUpdate = true;
-			this.el.object3D.add(iMesh);
+			const camera_mtx = camera_el.object3D.matrixWorld.elements;
+			let view = new Float32Array([camera_mtx[2], camera_mtx[6], camera_mtx[10]]);
+
+			this.iMesh = new THREE.InstancedMesh(geometry, material, vertexCount);
+			this.iMesh.frustumCulled = false;
+			this.iMesh.instanceMatrix.array = sortSplats(matrices, view);
+			this.iMesh.instanceMatrix.needsUpdate = true;
+			this.el.object3D.add(this.iMesh);
+
+			this.worker = new Worker(
+				URL.createObjectURL(
+					new Blob(["(", createWorker.toString(), ")(self)"], {
+						type: "application/javascript",
+					}),
+				),
+			);
+
+			this.worker.postMessage({
+				sortFunction: sortSplats.toString(),
+				matrices:matrices.buffer
+			}, [matrices.buffer]);
+
+			this.worker.onmessage = (e) => {
+				this.iMesh.instanceMatrix.array = new Float32Array(e.data.sortedMatrices);
+				this.iMesh.instanceMatrix.needsUpdate = true;
+				this.sortReady = true;
+			};
+			this.sortReady = true;
 		});
 	},
-	tick: function() {
+	tick: function(time, timeDelta) {
+		if(this.sortReady){
+			this.sortReady = false;
+			const camera_mtx = document.getElementById("camera").object3D.matrixWorld.elements;
+			let view = new Float32Array([camera_mtx[2], camera_mtx[6], camera_mtx[10]]);
+			this.worker.postMessage({view}, [view.buffer]);
+		}
 	}
 });
