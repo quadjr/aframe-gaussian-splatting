@@ -85,8 +85,16 @@ AFRAME.registerComponent("3d_gaussian_splatting", {
 
 					void main () {
 						vec4 center = vec4(instanceMatrix[3][0], instanceMatrix[3][1], instanceMatrix[3][2], 1);
+						// Adjust View Pose
+						mat4 adjViewMatrix = inverse(viewMatrix);
+						adjViewMatrix[0][1] *= -1.0;
+						adjViewMatrix[1][0] *= -1.0;
+						adjViewMatrix[1][2] *= -1.0;
+						adjViewMatrix[2][1] *= -1.0;
+						adjViewMatrix = inverse(adjViewMatrix);
+						mat4 modelView = adjViewMatrix * modelMatrix;
 
-						vec4 camspace = modelViewMatrix * center;
+						vec4 camspace = modelView * center;
 						vec4 pos2d = projectionMatrix * mat4(1,0,0,0,0,-1,0,0,0,0,1,0,0,0,0,1)  * camspace;
 											
 						float bounds = 1.2 * pos2d.w;
@@ -102,7 +110,7 @@ AFRAME.registerComponent("3d_gaussian_splatting", {
 							0., 0., 0.
 						);
 
-						mat3 W = transpose(mat3(modelViewMatrix));
+						mat3 W = transpose(mat3(modelView));
 						mat3 T = W * J;
 						mat3 cov = transpose(T) * mat3(instanceMatrix) * T;
 
