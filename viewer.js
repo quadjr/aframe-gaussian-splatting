@@ -7,7 +7,7 @@ function sortSplats(matrices, view){
 	let sizeList = new Int32Array(depthList.buffer);
 	for (let i = 0; i < vertexCount; i++) {
 		let depth =
-			((view[0] * matrices[i * 16 + 12] +
+			((view[0] * matrices[i * 16 + 12] -
 				view[1] * matrices[i * 16 + 13] -
 				view[2] * matrices[i * 16 + 14]));
 		depthList[i] = depth;
@@ -91,6 +91,7 @@ AFRAME.registerComponent("3d_gaussian_splatting", {
 						adjViewMatrix[1][0] *= -1.0;
 						adjViewMatrix[1][2] *= -1.0;
 						adjViewMatrix[2][1] *= -1.0;
+						adjViewMatrix[3][1] *= -1.0;
 						adjViewMatrix = inverse(adjViewMatrix);
 						mat4 modelView = adjViewMatrix * modelMatrix;
 
