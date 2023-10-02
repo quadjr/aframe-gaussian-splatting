@@ -1,6 +1,6 @@
 {
   "name": "aframe-gaussian-splatting-component",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "This component is an A-Frame implementation of real-time rendering for '3D Gaussian Splatting for Real-Time Radiance Field Rendering'",
   "main": "index.js",
   "scripts": {
@@ -20,5 +20,8 @@
   "bugs": {
     "url": "https://github.com/quadjr/aframe-gaussian-splatting/issues"
   },
-  "homepage": "https://github.com/quadjr/aframe-gaussian-splatting#readme"
+  "homepage": "https://github.com/quadjr/aframe-gaussian-splatting#readme",
+  "dependencies": {
+    "uglify-js": "^3.17.4"
+  }
 }

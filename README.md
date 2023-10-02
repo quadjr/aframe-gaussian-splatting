@@ -21,7 +21,7 @@ About the splat file, please refer [antimatter15](https://github.com/antimatter1
 ```html
 <head>
   <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
-  <script src="https://unpkg.com/aframe-gaussian-splatting-component@0.0.1/dist/aframe-agaussian-splatting-component.min.js"></script>
+  <script src="https://unpkg.com/aframe-gaussian-splatting-component@0.0.2/dist/aframe-agaussian-splatting-component.min.js"></script>
 </head>
 
 <body>
