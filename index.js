@@ -12,17 +12,30 @@ AFRAME.registerComponent("gaussian_splatting", {
 			let size = new THREE.Vector2();
 			this.el.sceneEl.renderer.getSize(size);
 
+			let renderTarget_gs = new THREE.WebGLRenderTarget(size.x, size.y, {
+				minFilter: THREE.NearestFilter ,
+				magFilter: THREE.NearestFilter 
+			});
+
+			let renderTarget_camera = new THREE.WebGLRenderTarget(size.x, size.y, {
+				minFilter: THREE.NearestFilter ,
+				magFilter: THREE.NearestFilter ,
+				depthTexture: new THREE.DepthTexture()
+			});
+
 			const focal = (size.y / 2.0) / Math.tan(this.el.sceneEl.camera.el.components.camera.data.fov / 2.0 * Math.PI / 180.0);
 
 			const geometry = new THREE.PlaneGeometry( 4, 4);
 			const material = new THREE.ShaderMaterial( {
 				uniforms : {
-					"viewport": {value: new Float32Array([size.x, size.y])},
-					"focal": {value: focal},
+					viewport: {value: new Float32Array([size.x, size.y])},
+					focal: {value: focal},
+					cameraDepth: { value: renderTarget_camera.depthTexture},
 				},
 				vertexShader: `
-					varying vec4 vColor;
-					varying vec2 vPosition;
+					out vec4 vColor;
+					out vec2 vPosition;
+					out vec4 vUv;
 					uniform vec2 viewport;
 					uniform float focal;
 
@@ -36,11 +49,13 @@ AFRAME.registerComponent("gaussian_splatting", {
 						adjViewMatrix[2][1] *= -1.0;
 						adjViewMatrix[3][1] *= -1.0;
 						adjViewMatrix = inverse(adjViewMatrix);
-						mat4 modelView = adjViewMatrix * modelMatrix;
+						mat4 modelMatrix_fixy = modelMatrix;
+						modelMatrix_fixy[3][1] *= -1.0;
+						mat4 modelView = adjViewMatrix * modelMatrix_fixy;
 
 						vec4 camspace = modelView * center;
-						vec4 pos2d = projectionMatrix * mat4(1,0,0,0,0,-1,0,0,0,0,1,0,0,0,0,1)  * camspace;
-											
+						vec4 pos2d = projectionMatrix * mat4(1,0,0,0,0,-1,0,0,0,0,1,0,0,0,0,1) * camspace;
+
 						float bounds = 1.2 * pos2d.w;
 						if (pos2d.z < -pos2d.w || pos2d.x < -bounds || pos2d.x > bounds
 							|| pos2d.y < -bounds || pos2d.y > bounds) {
@@ -79,15 +94,20 @@ AFRAME.registerComponent("gaussian_splatting", {
 							vCenter 
 								+ position.x * v2 / viewport * 2.0 
 								+ position.y * v1 / viewport * 2.0, 0.0, 1.0);
+						vUv = vec4(gl_Position.x / gl_Position.w / 2.0 + 0.5, gl_Position.y / gl_Position.w / 2.0 + 0.5, pos2d.z / pos2d.w / 2.0 + 0.5, 1);
 					}
 					`,
 				fragmentShader: `
-					varying vec4 vColor;
-					varying vec2 vPosition;
+					in vec4 vColor;
+					in vec2 vPosition;
+					in vec4 vUv;
+					uniform sampler2D cameraDepth;
 
 					void main () {
 						float A = -dot(vPosition, vPosition);
 						if (A < -4.0) discard;
+						float depthValue = texture2D(cameraDepth, vUv.xy).r;
+						if(vUv.z >= depthValue) discard;
 						float B = exp(A) * vColor.a;
 						gl_FragColor = vec4(B * vColor.rgb, B);
 					}
@@ -110,6 +130,8 @@ AFRAME.registerComponent("gaussian_splatting", {
 				material.uniforms.viewport.value[0] = size.x;
 				material.uniforms.viewport.value[1] = size.y;
 				material.uniforms.focal.value = focal;
+				renderTarget_gs.setSize(size.x, size.y);
+				renderTarget_camera.setSize(size.x, size.y);
 			});
 
 			const rowLength = 3 * 4 + 3 * 4 + 4 + 4;
@@ -158,12 +180,55 @@ AFRAME.registerComponent("gaussian_splatting", {
 
 			const camera_mtx = this.el.sceneEl.camera.el.object3D.matrixWorld.elements;
 			let view = new Float32Array([camera_mtx[2], camera_mtx[6], camera_mtx[10]]);
-
 			this.iMesh = new THREE.InstancedMesh(geometry, material, vertexCount);
 			this.iMesh.frustumCulled = false;
 			this.iMesh.instanceMatrix.array = this.sortSplats(matrices, view);
 			this.iMesh.instanceMatrix.needsUpdate = true;
+			this.iMesh.visible = false;
 			this.el.object3D.add(this.iMesh);
+
+			let composed_screen = new THREE.Mesh(
+				new THREE.PlaneGeometry( 2, 2 ),
+				new THREE.ShaderMaterial( {
+					vertexShader: `
+						out vec2 vUv;
+						void main() {
+							vUv = uv;
+							gl_Position = vec4(uv.x * 2.0 - 1.0, uv.y * 2.0 - 1.0, 0, 1.0);
+						}
+					`,
+					fragmentShader: `
+						in vec2 vUv;
+						uniform sampler2D cameraTexture;
+						uniform sampler2D gsTexture;
+						void main() {
+							vec4 camera = texture(cameraTexture, vUv);
+							vec4 gs = texture(gsTexture, vUv);
+							gl_FragColor = vec4(gs.rgb + camera.rgb * (1.0 - gs.a), gs.a + camera.a);
+						}
+					`,
+					uniforms: {
+						cameraTexture: { value: renderTarget_camera.texture },
+						gsTexture: { value: renderTarget_gs.texture },
+					}
+				} )
+			);
+			composed_screen.onBeforeRender = () => {
+				if(this.render_skip)return; // Avoid infinite loop
+				this.render_skip = true;
+				// Render Camera View
+				this.el.sceneEl.renderer.setRenderTarget(renderTarget_camera);
+				this.el.sceneEl.renderer.render(this.el.sceneEl.object3D, this.el.sceneEl.camera);
+				// Render Gaussian Splatting
+				this.iMesh.visible = true;
+				this.el.sceneEl.renderer.setRenderTarget(renderTarget_gs);
+				this.el.sceneEl.renderer.render(this.iMesh, this.el.sceneEl.camera);
+				this.iMesh.visible = false;
+				// Reset Render Target
+				this.el.sceneEl.renderer.setRenderTarget(null);
+				this.render_skip = false;
+			}
+			this.el.object3D.add(composed_screen);
 
 			this.worker = new Worker(
 				URL.createObjectURL(
