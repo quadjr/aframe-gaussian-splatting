@@ -1,10 +1,11 @@
 {
   "name": "aframe-gaussian-splatting-component",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "This component is an A-Frame implementation of real-time rendering for '3D Gaussian Splatting for Real-Time Radiance Field Rendering'",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dist": "uglifyjs ./index.js -c  --keep-fnames --source-map --output ./dist/aframe-gaussian-splatting-component.min.js"
   },
   "repository": {
     "type": "git",
