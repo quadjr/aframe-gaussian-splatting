@@ -29,14 +29,16 @@ AFRAME.registerComponent("gaussian_splatting", {
 			let vertexCount = Math.floor(buffer.byteLength / rowLength);
 			let f_buffer = new Float32Array(buffer);
 
-			if(vertexCount > 4096*4096/3){
-				console.log("vertexCount limited to 4096*4096/3", vertexCount);
-				vertexCount = Math.floor(4096*4096/3);
+			if(vertexCount > 4096*4096/2){
+				console.log("vertexCount limited to 4096*4096/2", vertexCount);
+				vertexCount = Math.floor(4096*4096/2);
 			}
 
 			let matrices = new Float32Array(vertexCount * 16);
 			const paddedCenterCovariances = new Float32Array(4096 * 4096 * 4);
-			const paddedColors = new Float32Array(4096 * 4096 * 4);
+			const paddedCenterCovariances_uint8 = new Uint8Array(paddedCenterCovariances.buffer);
+			const paddedCenterCovariances_int16 = new Int16Array(paddedCenterCovariances.buffer);
+			const paddedCenterCovariances_uint32 = new Uint32Array(paddedCenterCovariances.buffer);
 			for (let i = 0; i < vertexCount; i++) {
 				let quat = new THREE.Quaternion(
 					(u_buffer[32 * i + 28 + 1] - 128) / 128.0,
@@ -64,33 +66,40 @@ AFRAME.registerComponent("gaussian_splatting", {
 				mtx.premultiply(mtx_t);
 				mtx.setPosition(center);
 
-				let destOffset = i * 12;
+				let cov_indexes = [0, 1, 2, 5, 6, 10];
+				let max_value = 0.0;
+				for(let j = 0; j < cov_indexes.length; j++){
+					if(Math.abs(mtx.elements[cov_indexes[j]]) > max_value){
+						max_value = Math.abs(mtx.elements[cov_indexes[j]]);
+					}
+				}
+
+				let destOffset = i * 8;
 				paddedCenterCovariances[destOffset + 0] = center.x;
 				paddedCenterCovariances[destOffset + 1] = center.y;
 				paddedCenterCovariances[destOffset + 2] = center.z;
-				paddedCenterCovariances[destOffset + 3] = mtx.elements[0];
-				paddedCenterCovariances[destOffset + 4] = mtx.elements[1];
-				paddedCenterCovariances[destOffset + 5] = mtx.elements[2];
-				paddedCenterCovariances[destOffset + 6] = mtx.elements[5];
-				paddedCenterCovariances[destOffset + 7] = mtx.elements[6];
-				paddedCenterCovariances[destOffset + 8] = mtx.elements[10];
+				paddedCenterCovariances[destOffset + 3] = max_value / 32767.0;
+
+				destOffset = (i * 8 + 4) * 2;
+				for(let j = 0; j < cov_indexes.length; j++){
+					paddedCenterCovariances_int16[destOffset + j] = parseInt(mtx.elements[cov_indexes[j]] * 32767.0 / max_value);
+				}
 
 				// RGBA
-				destOffset = i * 4;
-				paddedColors[destOffset + 0] = u_buffer[32 * i + 24 + 0] / 255;
-				paddedColors[destOffset + 1] = u_buffer[32 * i + 24 + 1] / 255;
-				paddedColors[destOffset + 2] = u_buffer[32 * i + 24 + 2] / 255;
-				paddedColors[destOffset + 3] = u_buffer[32 * i + 24 + 3] / 255;
+				destOffset = (i * 8 + 7) * 4;
+				paddedCenterCovariances_uint8[destOffset + 0] = u_buffer[32 * i + 24 + 0];
+				paddedCenterCovariances_uint8[destOffset + 1] = u_buffer[32 * i + 24 + 1];
+				paddedCenterCovariances_uint8[destOffset + 2] = u_buffer[32 * i + 24 + 2];
+				paddedCenterCovariances_uint8[destOffset + 3] = u_buffer[32 * i + 24 + 3];
 
 				for(let j = 0; j < 16; j++){
 					matrices[i * 16 + j] = mtx.elements[j];
 				}
 			}
 
-			const centerCovarianceTexture = new THREE.DataTexture(paddedCenterCovariances, 4096, 4096, THREE.RGBAFormat, THREE.FloatType);
+			const centerCovarianceTexture = new THREE.DataTexture(paddedCenterCovariances_uint32, 4096, 4096, THREE.RGBAIntegerFormat, THREE.UnsignedIntType);
+			centerCovarianceTexture.internalFormat = "RGBA32UI";
 			centerCovarianceTexture.needsUpdate = true;
-			const colorTexture = new THREE.DataTexture(paddedColors, 4096, 4096, THREE.RGBAFormat, THREE.FloatType);
-			colorTexture.needsUpdate = true;
 
 			const camera_mtx = this.el.sceneEl.camera.el.object3D.matrixWorld.elements;
 			let view = new Float32Array([camera_mtx[2], camera_mtx[6], camera_mtx[10]]);
@@ -118,35 +127,50 @@ AFRAME.registerComponent("gaussian_splatting", {
 				uniforms : {
 					viewport: {value: new Float32Array([size.x, size.y])},
 					focal: {value: focal},
-					centerCovarianceTexture: {value: centerCovarianceTexture},
-					colorTexture: {value: colorTexture}
+					centerCovarianceTexture: {value: centerCovarianceTexture}
 				},
 				vertexShader: `
+					precision highp usampler2D;
+
 					out vec4 vColor;
 					out vec2 vPosition;
 					uniform vec2 viewport;
 					uniform float focal;
 
 					attribute uint splatIndex;
-					uniform sampler2D centerCovarianceTexture;
-					uniform sampler2D colorTexture;
+					uniform usampler2D centerCovarianceTexture;
 
 					ivec2 getDataUV(in int stride, in int offset) {
 						uint covarianceD = splatIndex * uint(stride) + uint(offset);
 						return ivec2(covarianceD%uint(4096),covarianceD/uint(4096));
 					}
 
+					vec2 unpackInt16(in uint value) {
+						int v = int(value);
+						int v0 = v >> 16;
+						int v1 = (v & 0xFFFF);
+						if((v & 0x8000) != 0)
+							v1 |= 0xFFFF0000;
+						return vec2(float(v1), float(v0));
+					}
+
 					void main () {
-						vec4 sampledCenterCovarianceA = texelFetch(centerCovarianceTexture, getDataUV(3, 0), 0);
-						vec4 sampledCenterCovarianceB = texelFetch(centerCovarianceTexture, getDataUV(3, 1), 0);
-						vec4 sampledCenterCovarianceC = texelFetch(centerCovarianceTexture, getDataUV(3, 2), 0);
+						uvec4 sampledCenterCovarianceA = texelFetch(centerCovarianceTexture, getDataUV(2, 0), 0);
+						uvec4 sampledCenterCovarianceB = texelFetch(centerCovarianceTexture, getDataUV(2, 1), 0);
 
-						vec4 center = vec4(sampledCenterCovarianceA.xyz, 1);
-						vec3 cov3D_M11_M12_M13 = vec3(sampledCenterCovarianceA.w, sampledCenterCovarianceB.xy);
-						vec3 cov3D_M22_M23_M33 = vec3(sampledCenterCovarianceB.zw, sampledCenterCovarianceC.x);
+						vec4 center = vec4(uintBitsToFloat(sampledCenterCovarianceA.x), uintBitsToFloat(sampledCenterCovarianceA.y), uintBitsToFloat(sampledCenterCovarianceA.z), 1);
+						float conv_scale = uintBitsToFloat(sampledCenterCovarianceA.w);
+						vec2 cov3D_M11_M12 = unpackInt16(sampledCenterCovarianceB.x) * conv_scale;
+						vec2 cov3D_M13_M22 = unpackInt16(sampledCenterCovarianceB.y) * conv_scale;
+						vec2 cov3D_M23_M33 = unpackInt16(sampledCenterCovarianceB.z) * conv_scale;
 
-						ivec2 colorUV = ivec2(splatIndex%uint(4096),splatIndex/uint(4096));
-						vec4 sampledColor = texelFetch(colorTexture, colorUV, 0);
+						uint colorUint = sampledCenterCovarianceB.w;
+						vec4 sampledColor = vec4(
+							float(colorUint & uint(0xFF)) / 255.0,
+							float((colorUint >> uint(8)) & uint(0xFF)) / 255.0,
+							float((colorUint >> uint(16)) & uint(0xFF)) / 255.0,
+							float(colorUint >> uint(24)) / 255.0
+						);
 
 						// Adjust View Pose
 						mat4 adjViewMatrix = inverse(viewMatrix);
@@ -171,9 +195,9 @@ AFRAME.registerComponent("gaussian_splatting", {
 						}
 
 						mat3 Vrk = mat3(
-							cov3D_M11_M12_M13.x, cov3D_M11_M12_M13.y, cov3D_M11_M12_M13.z,
-							cov3D_M11_M12_M13.y, cov3D_M22_M23_M33.x, cov3D_M22_M23_M33.y,
-							cov3D_M11_M12_M13.z, cov3D_M22_M23_M33.y, cov3D_M22_M23_M33.z
+							cov3D_M11_M12.x, cov3D_M11_M12.y, cov3D_M13_M22.x,
+							cov3D_M11_M12.y, cov3D_M13_M22.y, cov3D_M23_M33.x,
+							cov3D_M13_M22.x, cov3D_M23_M33.x, cov3D_M23_M33.y
 						);
 
 						mat3 J = mat3(
@@ -224,7 +248,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 				blendSrcAlpha : THREE.OneFactor,
 				depthTest : true,
 				depthWrite: false,
-				transparent: false
+				transparent: true
 			} );
 
 			window.addEventListener('resize', () => {
