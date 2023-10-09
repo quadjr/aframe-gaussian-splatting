@@ -6,9 +6,9 @@ This code is derived from the WebGL implementation developed by [antimatter15](h
 
 ### Properties
 
-| Property  | Description          | Default Value |
-| --------  | -----------          | ------------- |
-| src       | url of splat file    | train.splat   |
+| Property  | Description                 | Default Value |
+| --------  | -----------                 | ------------- |
+| src       | url of splat or ply file    | train.splat   |
 
 
 ### Usage
@@ -23,7 +23,7 @@ About the splat file, please refer [antimatter15](https://github.com/antimatter1
 <html>
   <head>
     <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
-    <script src="https://unpkg.com/aframe-gaussian-splatting-component@0.0.9/dist/aframe-gaussian-splatting-component.min.js"></script>
+    <script src="https://unpkg.com/aframe-gaussian-splatting-component@0.0.10/dist/aframe-gaussian-splatting-component.min.js"></script>
   </head>
   <body>
     <a-scene renderer="antialias: false" stats>

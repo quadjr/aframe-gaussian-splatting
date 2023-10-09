@@ -29,16 +29,16 @@ AFRAME.registerComponent("gaussian_splatting", {
 			let vertexCount = Math.floor(buffer.byteLength / rowLength);
 			let f_buffer = new Float32Array(buffer);
 
-			if(vertexCount > 4096*4096/2){
-				console.log("vertexCount limited to 4096*4096/2", vertexCount);
-				vertexCount = Math.floor(4096*4096/2);
+			if(vertexCount > 4096*4096){
+				console.log("vertexCount limited to 4096*4096", vertexCount);
+				vertexCount = 4096*4096;
 			}
 
 			let matrices = new Float32Array(vertexCount * 16);
-			const paddedCenterCovariances = new Float32Array(4096 * 4096 * 4);
-			const paddedCenterCovariances_uint8 = new Uint8Array(paddedCenterCovariances.buffer);
-			const paddedCenterCovariances_int16 = new Int16Array(paddedCenterCovariances.buffer);
-			const paddedCenterCovariances_uint32 = new Uint32Array(paddedCenterCovariances.buffer);
+			const centerAndScaleData = new Float32Array(4096 * 4096 * 4);
+			const convAndColorData = new Uint32Array(4096 * 4096 * 4);
+			const convAndColorData_uint8 = new Uint8Array(convAndColorData.buffer);
+			const convAndColorData_int16 = new Int16Array(convAndColorData.buffer);
 			for (let i = 0; i < vertexCount; i++) {
 				let quat = new THREE.Quaternion(
 					(u_buffer[32 * i + 28 + 1] - 128) / 128.0,
@@ -74,32 +74,34 @@ AFRAME.registerComponent("gaussian_splatting", {
 					}
 				}
 
-				let destOffset = i * 8;
-				paddedCenterCovariances[destOffset + 0] = center.x;
-				paddedCenterCovariances[destOffset + 1] = center.y;
-				paddedCenterCovariances[destOffset + 2] = center.z;
-				paddedCenterCovariances[destOffset + 3] = max_value / 32767.0;
+				let destOffset = i * 4;
+				centerAndScaleData[destOffset + 0] = center.x;
+				centerAndScaleData[destOffset + 1] = center.y;
+				centerAndScaleData[destOffset + 2] = center.z;
+				centerAndScaleData[destOffset + 3] = max_value / 32767.0;
 
-				destOffset = (i * 8 + 4) * 2;
+				destOffset = i * 4 * 2;
 				for(let j = 0; j < cov_indexes.length; j++){
-					paddedCenterCovariances_int16[destOffset + j] = parseInt(mtx.elements[cov_indexes[j]] * 32767.0 / max_value);
+					convAndColorData_int16[destOffset + j] = parseInt(mtx.elements[cov_indexes[j]] * 32767.0 / max_value);
 				}
 
 				// RGBA
-				destOffset = (i * 8 + 7) * 4;
-				paddedCenterCovariances_uint8[destOffset + 0] = u_buffer[32 * i + 24 + 0];
-				paddedCenterCovariances_uint8[destOffset + 1] = u_buffer[32 * i + 24 + 1];
-				paddedCenterCovariances_uint8[destOffset + 2] = u_buffer[32 * i + 24 + 2];
-				paddedCenterCovariances_uint8[destOffset + 3] = u_buffer[32 * i + 24 + 3];
+				destOffset = (i * 4 + 3) * 4;
+				convAndColorData_uint8[destOffset + 0] = u_buffer[32 * i + 24 + 0];
+				convAndColorData_uint8[destOffset + 1] = u_buffer[32 * i + 24 + 1];
+				convAndColorData_uint8[destOffset + 2] = u_buffer[32 * i + 24 + 2];
+				convAndColorData_uint8[destOffset + 3] = u_buffer[32 * i + 24 + 3];
 
 				for(let j = 0; j < 16; j++){
 					matrices[i * 16 + j] = mtx.elements[j];
 				}
 			}
 
-			const centerCovarianceTexture = new THREE.DataTexture(paddedCenterCovariances_uint32, 4096, 4096, THREE.RGBAIntegerFormat, THREE.UnsignedIntType);
-			centerCovarianceTexture.internalFormat = "RGBA32UI";
-			centerCovarianceTexture.needsUpdate = true;
+			const centerAndScaleTexture = new THREE.DataTexture(centerAndScaleData, 4096, 4096, THREE.RGBA, THREE.FloatType);
+			centerAndScaleTexture.needsUpdate = true;
+			const convAndColorTexture = new THREE.DataTexture(convAndColorData, 4096, 4096, THREE.RGBAIntegerFormat, THREE.UnsignedIntType);
+			convAndColorTexture.internalFormat = "RGBA32UI";
+			convAndColorTexture.needsUpdate = true;
 
 			const camera_mtx = this.el.sceneEl.camera.el.object3D.matrixWorld.elements;
 			let view = new Float32Array([camera_mtx[2], camera_mtx[6], camera_mtx[10]]);
@@ -127,7 +129,8 @@ AFRAME.registerComponent("gaussian_splatting", {
 				uniforms : {
 					viewport: {value: new Float32Array([size.x, size.y])},
 					focal: {value: focal},
-					centerCovarianceTexture: {value: centerCovarianceTexture}
+					centerAndScaleTexture: {value: centerAndScaleTexture},
+					convAndColorTexture: {value: convAndColorTexture}
 				},
 				vertexShader: `
 					precision highp usampler2D;
@@ -138,12 +141,8 @@ AFRAME.registerComponent("gaussian_splatting", {
 					uniform float focal;
 
 					attribute uint splatIndex;
-					uniform usampler2D centerCovarianceTexture;
-
-					ivec2 getDataUV(in int stride, in int offset) {
-						uint covarianceD = splatIndex * uint(stride) + uint(offset);
-						return ivec2(covarianceD%uint(4096),covarianceD/uint(4096));
-					}
+					uniform sampler2D centerAndScaleTexture;
+					uniform usampler2D convAndColorTexture;
 
 					vec2 unpackInt16(in uint value) {
 						int v = int(value);
@@ -155,16 +154,16 @@ AFRAME.registerComponent("gaussian_splatting", {
 					}
 
 					void main () {
-						uvec4 sampledCenterCovarianceA = texelFetch(centerCovarianceTexture, getDataUV(2, 0), 0);
-						uvec4 sampledCenterCovarianceB = texelFetch(centerCovarianceTexture, getDataUV(2, 1), 0);
+						ivec2 texPos = ivec2(splatIndex%uint(4096),splatIndex/uint(4096));;
+						vec4 centerAndScaleData = texelFetch(centerAndScaleTexture, texPos, 0);
+						uvec4 centerCovarianceData = texelFetch(convAndColorTexture, texPos, 0);
 
-						vec4 center = vec4(uintBitsToFloat(sampledCenterCovarianceA.x), uintBitsToFloat(sampledCenterCovarianceA.y), uintBitsToFloat(sampledCenterCovarianceA.z), 1);
-						float conv_scale = uintBitsToFloat(sampledCenterCovarianceA.w);
-						vec2 cov3D_M11_M12 = unpackInt16(sampledCenterCovarianceB.x) * conv_scale;
-						vec2 cov3D_M13_M22 = unpackInt16(sampledCenterCovarianceB.y) * conv_scale;
-						vec2 cov3D_M23_M33 = unpackInt16(sampledCenterCovarianceB.z) * conv_scale;
+						vec4 center = vec4(centerAndScaleData.xyz, 1);
+						vec2 cov3D_M11_M12 = unpackInt16(centerCovarianceData.x) * centerAndScaleData.w;
+						vec2 cov3D_M13_M22 = unpackInt16(centerCovarianceData.y) * centerAndScaleData.w;
+						vec2 cov3D_M23_M33 = unpackInt16(centerCovarianceData.z) * centerAndScaleData.w;
 
-						uint colorUint = sampledCenterCovarianceB.w;
+						uint colorUint = centerCovarianceData.w;
 						vec4 sampledColor = vec4(
 							float(colorUint & uint(0xFF)) / 255.0,
 							float((colorUint >> uint(8)) & uint(0xFF)) / 255.0,
