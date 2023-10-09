@@ -104,7 +104,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 			convAndColorTexture.needsUpdate = true;
 
 			const camera_mtx = this.el.sceneEl.camera.el.object3D.matrixWorld.elements;
-			let view = new Float32Array([camera_mtx[2], camera_mtx[6], camera_mtx[10]]);
+			let view = new Float32Array([camera_mtx[8], camera_mtx[9], camera_mtx[10]]);
 			let splatIndexArray = this.sortSplats(matrices, view);
 			const splatIndexes = new THREE.InstancedBufferAttribute(splatIndexArray, 1, false);
 			splatIndexes.setUsage(THREE.DynamicDrawUsage);
@@ -290,7 +290,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 		if(this.sortReady){
 			this.sortReady = false;
 			const camera_mtx = this.el.sceneEl.camera.el.object3D.matrixWorld.elements;
-			let view = new Float32Array([camera_mtx[2], camera_mtx[6], camera_mtx[10]]);
+			let view = new Float32Array([camera_mtx[8], camera_mtx[9], camera_mtx[10]]);
 			this.worker.postMessage({view}, [view.buffer]);
 		}
 	},
@@ -321,9 +321,9 @@ AFRAME.registerComponent("gaussian_splatting", {
 		let sizeList = new Int32Array(depthList.buffer);
 		for (let i = 0; i < vertexCount; i++) {
 			let depth =
-				-((view[0] * matrices[i * 16 + 12] -
-					view[1] * matrices[i * 16 + 13] -
-					view[2] * matrices[i * 16 + 14]));
+				((view[0] * matrices[i * 16 + 12] 
+				- view[1] * matrices[i * 16 + 13]
+				+ view[2] * matrices[i * 16 + 14]));
 			depthList[i] = depth;
 			if (depth > maxDepth) maxDepth = depth;
 			if (depth < minDepth) minDepth = depth;
