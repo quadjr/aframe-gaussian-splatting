@@ -179,8 +179,13 @@ AFRAME.registerComponent("gaussian_splatting", {
 						adjViewMatrix[2][1] *= -1.0;
 						adjViewMatrix[3][1] *= -1.0;
 						adjViewMatrix = inverse(adjViewMatrix);
-						mat4 modelMatrix_fixy = modelMatrix;
+						mat4 modelMatrix_fixy = inverse(modelMatrix);
+						modelMatrix_fixy[0][1] *= -1.0;
+						modelMatrix_fixy[1][0] *= -1.0;
+						modelMatrix_fixy[1][2] *= -1.0;
+						modelMatrix_fixy[2][1] *= -1.0;
 						modelMatrix_fixy[3][1] *= -1.0;
+						modelMatrix_fixy = inverse(modelMatrix_fixy);
 						mat4 modelView = adjViewMatrix * modelMatrix_fixy;
 
 						vec4 camspace = modelView * center;
