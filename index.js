@@ -36,9 +36,9 @@ AFRAME.registerComponent("gaussian_splatting", {
 
 			let matrices = new Float32Array(vertexCount * 16);
 			const centerAndScaleData = new Float32Array(4096 * 4096 * 4);
-			const convAndColorData = new Uint32Array(4096 * 4096 * 4);
-			const convAndColorData_uint8 = new Uint8Array(convAndColorData.buffer);
-			const convAndColorData_int16 = new Int16Array(convAndColorData.buffer);
+			const covAndColorData = new Uint32Array(4096 * 4096 * 4);
+			const covAndColorData_uint8 = new Uint8Array(covAndColorData.buffer);
+			const covAndColorData_int16 = new Int16Array(covAndColorData.buffer);
 			for (let i = 0; i < vertexCount; i++) {
 				let quat = new THREE.Quaternion(
 					(u_buffer[32 * i + 28 + 1] - 128) / 128.0,
@@ -82,15 +82,15 @@ AFRAME.registerComponent("gaussian_splatting", {
 
 				destOffset = i * 4 * 2;
 				for(let j = 0; j < cov_indexes.length; j++){
-					convAndColorData_int16[destOffset + j] = parseInt(mtx.elements[cov_indexes[j]] * 32767.0 / max_value);
+					covAndColorData_int16[destOffset + j] = parseInt(mtx.elements[cov_indexes[j]] * 32767.0 / max_value);
 				}
 
 				// RGBA
 				destOffset = (i * 4 + 3) * 4;
-				convAndColorData_uint8[destOffset + 0] = u_buffer[32 * i + 24 + 0];
-				convAndColorData_uint8[destOffset + 1] = u_buffer[32 * i + 24 + 1];
-				convAndColorData_uint8[destOffset + 2] = u_buffer[32 * i + 24 + 2];
-				convAndColorData_uint8[destOffset + 3] = u_buffer[32 * i + 24 + 3];
+				covAndColorData_uint8[destOffset + 0] = u_buffer[32 * i + 24 + 0];
+				covAndColorData_uint8[destOffset + 1] = u_buffer[32 * i + 24 + 1];
+				covAndColorData_uint8[destOffset + 2] = u_buffer[32 * i + 24 + 2];
+				covAndColorData_uint8[destOffset + 3] = u_buffer[32 * i + 24 + 3];
 
 				for(let j = 0; j < 16; j++){
 					matrices[i * 16 + j] = mtx.elements[j];
@@ -99,12 +99,12 @@ AFRAME.registerComponent("gaussian_splatting", {
 
 			const centerAndScaleTexture = new THREE.DataTexture(centerAndScaleData, 4096, 4096, THREE.RGBA, THREE.FloatType);
 			centerAndScaleTexture.needsUpdate = true;
-			const convAndColorTexture = new THREE.DataTexture(convAndColorData, 4096, 4096, THREE.RGBAIntegerFormat, THREE.UnsignedIntType);
-			convAndColorTexture.internalFormat = "RGBA32UI";
-			convAndColorTexture.needsUpdate = true;
+			const covAndColorTexture = new THREE.DataTexture(covAndColorData, 4096, 4096, THREE.RGBAIntegerFormat, THREE.UnsignedIntType);
+			covAndColorTexture.internalFormat = "RGBA32UI";
+			covAndColorTexture.needsUpdate = true;
 
-			const camera_mtx = this.el.sceneEl.camera.el.object3D.matrixWorld.elements;
-			let view = new Float32Array([camera_mtx[8], camera_mtx[9], camera_mtx[10]]);
+			let camera_mtx = this.getModelViewMatrix().elements;
+			let view = new Float32Array([camera_mtx[2], camera_mtx[6], camera_mtx[10]]);
 			let splatIndexArray = this.sortSplats(matrices, view);
 			const splatIndexes = new THREE.InstancedBufferAttribute(splatIndexArray, 1, false);
 			splatIndexes.setUsage(THREE.DynamicDrawUsage);
@@ -130,7 +130,9 @@ AFRAME.registerComponent("gaussian_splatting", {
 					viewport: {value: new Float32Array([size.x, size.y])},
 					focal: {value: focal},
 					centerAndScaleTexture: {value: centerAndScaleTexture},
-					convAndColorTexture: {value: convAndColorTexture}
+					covAndColorTexture: {value: covAndColorTexture},
+					gsProjectionMatrix: {value: this.getProjectionMatrix()},
+					gsModelViewMatrix: {value: this.getModelViewMatrix()},
 				},
 				vertexShader: `
 					precision highp usampler2D;
@@ -139,10 +141,12 @@ AFRAME.registerComponent("gaussian_splatting", {
 					out vec2 vPosition;
 					uniform vec2 viewport;
 					uniform float focal;
+					uniform mat4 gsProjectionMatrix;
+					uniform mat4 gsModelViewMatrix;
 
 					attribute uint splatIndex;
 					uniform sampler2D centerAndScaleTexture;
-					uniform usampler2D convAndColorTexture;
+					uniform usampler2D covAndColorTexture;
 
 					vec2 unpackInt16(in uint value) {
 						int v = int(value);
@@ -154,42 +158,12 @@ AFRAME.registerComponent("gaussian_splatting", {
 					}
 
 					void main () {
-						ivec2 texPos = ivec2(splatIndex%uint(4096),splatIndex/uint(4096));;
+						ivec2 texPos = ivec2(splatIndex%uint(4096),splatIndex/uint(4096));
 						vec4 centerAndScaleData = texelFetch(centerAndScaleTexture, texPos, 0);
-						uvec4 centerCovarianceData = texelFetch(convAndColorTexture, texPos, 0);
 
 						vec4 center = vec4(centerAndScaleData.xyz, 1);
-						vec2 cov3D_M11_M12 = unpackInt16(centerCovarianceData.x) * centerAndScaleData.w;
-						vec2 cov3D_M13_M22 = unpackInt16(centerCovarianceData.y) * centerAndScaleData.w;
-						vec2 cov3D_M23_M33 = unpackInt16(centerCovarianceData.z) * centerAndScaleData.w;
-
-						uint colorUint = centerCovarianceData.w;
-						vec4 sampledColor = vec4(
-							float(colorUint & uint(0xFF)) / 255.0,
-							float((colorUint >> uint(8)) & uint(0xFF)) / 255.0,
-							float((colorUint >> uint(16)) & uint(0xFF)) / 255.0,
-							float(colorUint >> uint(24)) / 255.0
-						);
-
-						// Adjust View Pose
-						mat4 adjViewMatrix = inverse(viewMatrix);
-						adjViewMatrix[0][1] *= -1.0;
-						adjViewMatrix[1][0] *= -1.0;
-						adjViewMatrix[1][2] *= -1.0;
-						adjViewMatrix[2][1] *= -1.0;
-						adjViewMatrix[3][1] *= -1.0;
-						adjViewMatrix = inverse(adjViewMatrix);
-						mat4 modelMatrix_fixy = inverse(modelMatrix);
-						modelMatrix_fixy[0][1] *= -1.0;
-						modelMatrix_fixy[1][0] *= -1.0;
-						modelMatrix_fixy[1][2] *= -1.0;
-						modelMatrix_fixy[2][1] *= -1.0;
-						modelMatrix_fixy[3][1] *= -1.0;
-						modelMatrix_fixy = inverse(modelMatrix_fixy);
-						mat4 modelView = adjViewMatrix * modelMatrix_fixy;
-
-						vec4 camspace = modelView * center;
-						vec4 pos2d = projectionMatrix * mat4(1,0,0,0,0,-1,0,0,0,0,1,0,0,0,0,1) * camspace;
+						vec4 camspace = gsModelViewMatrix * center;
+						vec4 pos2d = gsProjectionMatrix * camspace;
 
 						float bounds = 1.2 * pos2d.w;
 						if (pos2d.z < -pos2d.w || pos2d.x < -bounds || pos2d.x > bounds
@@ -198,6 +172,10 @@ AFRAME.registerComponent("gaussian_splatting", {
 							return;
 						}
 
+						uvec4 covAndColorData = texelFetch(covAndColorTexture, texPos, 0);
+						vec2 cov3D_M11_M12 = unpackInt16(covAndColorData.x) * centerAndScaleData.w;
+						vec2 cov3D_M13_M22 = unpackInt16(covAndColorData.y) * centerAndScaleData.w;
+						vec2 cov3D_M23_M33 = unpackInt16(covAndColorData.z) * centerAndScaleData.w;
 						mat3 Vrk = mat3(
 							cov3D_M11_M12.x, cov3D_M11_M12.y, cov3D_M13_M22.x,
 							cov3D_M11_M12.y, cov3D_M13_M22.y, cov3D_M23_M33.x,
@@ -210,7 +188,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 							0., 0., 0.
 						);
 
-						mat3 W = transpose(mat3(modelView));
+						mat3 W = transpose(mat3(gsModelViewMatrix));
 						mat3 T = W * J;
 						mat3 cov = transpose(T) * Vrk * T;
 
@@ -228,7 +206,13 @@ AFRAME.registerComponent("gaussian_splatting", {
 						vec2 v1 = min(sqrt(2.0 * lambda1), 1024.0) * diagonalVector;
 						vec2 v2 = min(sqrt(2.0 * lambda2), 1024.0) * vec2(diagonalVector.y, -diagonalVector.x);
 
-						vColor = sampledColor;
+						uint colorUint = covAndColorData.w;
+						vColor = vec4(
+							float(colorUint & uint(0xFF)) / 255.0,
+							float((colorUint >> uint(8)) & uint(0xFF)) / 255.0,
+							float((colorUint >> uint(16)) & uint(0xFF)) / 255.0,
+							float(colorUint >> uint(24)) / 255.0
+						);
 						vPosition = position.xy;
 
 						gl_Position = vec4(
@@ -255,6 +239,13 @@ AFRAME.registerComponent("gaussian_splatting", {
 				transparent: true
 			} );
 
+			mesh = new THREE.Mesh(geometry, material, vertexCount);
+			mesh.frustumCulled = false;
+			mesh.onBeforeRender = (() => {
+				mesh.material.uniforms.gsModelViewMatrix.value = this.getModelViewMatrix();
+			});
+			this.el.object3D.add(mesh);
+
 			window.addEventListener('resize', () => {
 				let size = new THREE.Vector2();
 				this.el.sceneEl.renderer.getSize(size);
@@ -262,11 +253,8 @@ AFRAME.registerComponent("gaussian_splatting", {
 				material.uniforms.viewport.value[0] = size.x;
 				material.uniforms.viewport.value[1] = size.y;
 				material.uniforms.focal.value = focal;
+				mesh.material.uniforms.gsProjectionMatrix.value = this.getProjectionMatrix();
 			});
-
-			let mesh = new THREE.Mesh(geometry, material, vertexCount);
-			mesh.frustumCulled = false;
-			this.el.object3D.add(mesh);
 
 			this.worker = new Worker(
 				URL.createObjectURL(
@@ -294,10 +282,37 @@ AFRAME.registerComponent("gaussian_splatting", {
 	tick: function(time, timeDelta) {
 		if(this.sortReady){
 			this.sortReady = false;
-			const camera_mtx = this.el.sceneEl.camera.el.object3D.matrixWorld.elements;
-			let view = new Float32Array([camera_mtx[8], camera_mtx[9], camera_mtx[10]]);
+			let camera_mtx = this.getModelViewMatrix().elements;
+			let view = new Float32Array([camera_mtx[2], camera_mtx[6], camera_mtx[10]]);
 			this.worker.postMessage({view}, [view.buffer]);
 		}
+	},
+	getProjectionMatrix: function() {
+		let mtx = this.el.sceneEl.camera.el.components.camera.camera.projectionMatrix.clone();
+		mtx.elements[4] *= -1;
+		mtx.elements[5] *= -1;
+		mtx.elements[6] *= -1;
+		mtx.elements[7] *= -1;
+		return mtx;
+	},
+	getModelViewMatrix: function() {
+		const viewMatrix = this.el.sceneEl.camera.el.object3D.matrixWorld.clone();
+		viewMatrix.elements[1] *= -1.0;
+		viewMatrix.elements[4] *= -1.0;
+		viewMatrix.elements[6] *= -1.0;
+		viewMatrix.elements[9] *= -1.0;
+		viewMatrix.elements[13] *= -1.0;
+		viewMatrix.invert();
+		const mtx = this.el.object3D.matrixWorld.clone();
+		mtx.invert();
+		mtx.elements[1] *= -1.0;
+		mtx.elements[4] *= -1.0;
+		mtx.elements[6] *= -1.0;
+		mtx.elements[9] *= -1.0;
+		mtx.elements[13] *= -1.0;
+		mtx.invert();
+		mtx.premultiply(viewMatrix);
+		return mtx;
 	},
 	createWorker: function (self) {
 		let sortFunction;
@@ -327,7 +342,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 		for (let i = 0; i < vertexCount; i++) {
 			let depth =
 				((view[0] * matrices[i * 16 + 12] 
-				- view[1] * matrices[i * 16 + 13]
+				+ view[1] * matrices[i * 16 + 13]
 				+ view[2] * matrices[i * 16 + 14]));
 			depthList[i] = depth;
 			if (depth > maxDepth) maxDepth = depth;
@@ -345,7 +360,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 		for (let i = 1; i < 256*256; i++) starts0[i] = starts0[i - 1] + counts0[i - 1];
 		let depthIndex = new Uint32Array(vertexCount);
 		for (let i = 0; i < vertexCount; i++) depthIndex[starts0[sizeList[i]]++] = i;
-	
+
 		return depthIndex;
 	},
 	processPlyBuffer: function (inputBuffer) {
