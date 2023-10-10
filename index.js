@@ -3,16 +3,26 @@ AFRAME.registerComponent("gaussian_splatting", {
 		src: {type: 'string', default: "train.splat"},
 	},
 	init: function () {
+		// aframe-specific data
 		this.el.sceneEl.renderer.setPixelRatio(1);
+		this.loadData(this.el.sceneEl.renderer, this.data.src, this.el.sceneEl.camera.el.components.camera.camera, this.el.sceneEl.camera.el.components.camera.data, this.el.object3D);
+	},
+	// also works from vanilla three.js
+	loadData: function(renderer, src, camera, cameraData, object) {
+		this.renderer = renderer;
+		this.object = object;
+		this.camera = camera;
+		this.cameraData = cameraData;
+		this.src = src;
 
 		fetch(this.data.src)
 		.then((data) => data.blob())
 		.then((res) => res.arrayBuffer())
 		.then((buffer) => {
 			let size = new THREE.Vector2();
-			this.el.sceneEl.renderer.getSize(size);
+			renderer.getSize(size);
 
-			const focal = (size.y / 2.0) / Math.tan(this.el.sceneEl.camera.el.components.camera.data.fov / 2.0 * Math.PI / 180.0);
+			const focal = (size.y / 2.0) / Math.tan(cameraData.fov / 2.0 * Math.PI / 180.0);
 
 			let u_buffer = new Uint8Array(buffer);
 			if (
@@ -244,12 +254,12 @@ AFRAME.registerComponent("gaussian_splatting", {
 			mesh.onBeforeRender = (() => {
 				mesh.material.uniforms.gsModelViewMatrix.value = this.getModelViewMatrix();
 			});
-			this.el.object3D.add(mesh);
+			object.add(mesh);
 
 			window.addEventListener('resize', () => {
 				let size = new THREE.Vector2();
-				this.el.sceneEl.renderer.getSize(size);
-				const focal = (size.y / 2.0) / Math.tan(this.el.sceneEl.camera.el.components.camera.data.fov / 2.0 * Math.PI / 180.0);
+				renderer.getSize(size);
+				const focal = (size.y / 2.0) / Math.tan(cameraData.fov / 2.0 * Math.PI / 180.0);
 				material.uniforms.viewport.value[0] = size.x;
 				material.uniforms.viewport.value[1] = size.y;
 				material.uniforms.focal.value = focal;
@@ -288,7 +298,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 		}
 	},
 	getProjectionMatrix: function() {
-		let mtx = this.el.sceneEl.camera.el.components.camera.camera.projectionMatrix.clone();
+		let mtx = this.camera.projectionMatrix.clone();
 		mtx.elements[4] *= -1;
 		mtx.elements[5] *= -1;
 		mtx.elements[6] *= -1;
@@ -296,14 +306,14 @@ AFRAME.registerComponent("gaussian_splatting", {
 		return mtx;
 	},
 	getModelViewMatrix: function() {
-		const viewMatrix = this.el.sceneEl.camera.el.object3D.matrixWorld.clone();
+		const viewMatrix = this.camera.matrixWorld.clone();
 		viewMatrix.elements[1] *= -1.0;
 		viewMatrix.elements[4] *= -1.0;
 		viewMatrix.elements[6] *= -1.0;
 		viewMatrix.elements[9] *= -1.0;
 		viewMatrix.elements[13] *= -1.0;
 		viewMatrix.invert();
-		const mtx = this.el.object3D.matrixWorld.clone();
+		const mtx = this.object.matrixWorld.clone();
 		mtx.invert();
 		mtx.elements[1] *= -1.0;
 		mtx.elements[4] *= -1.0;
