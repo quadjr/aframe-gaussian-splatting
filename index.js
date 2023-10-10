@@ -239,22 +239,22 @@ AFRAME.registerComponent("gaussian_splatting", {
 				transparent: true
 			} );
 
+			material.onBeforeRender = ((renderer, scene, camera, geometry, object, group) => {
+				let projectionMatrix = this.getProjectionMatrix(camera);
+				mesh.material.uniforms.gsProjectionMatrix.value = projectionMatrix;
+				mesh.material.uniforms.gsModelViewMatrix.value = this.getModelViewMatrix(camera);
+
+				let viewport = new THREE.Vector4();
+				renderer.getCurrentViewport(viewport);
+				const focal = (viewport.w / 2.0) * Math.abs(projectionMatrix.elements[5]);
+				material.uniforms.viewport.value[0] = viewport.z;
+				material.uniforms.viewport.value[1] = viewport.w;
+				material.uniforms.focal.value = focal;
+			});
+
 			mesh = new THREE.Mesh(geometry, material, vertexCount);
 			mesh.frustumCulled = false;
-			mesh.onBeforeRender = (() => {
-				mesh.material.uniforms.gsModelViewMatrix.value = this.getModelViewMatrix();
-			});
 			this.el.object3D.add(mesh);
-
-			window.addEventListener('resize', () => {
-				let size = new THREE.Vector2();
-				this.el.sceneEl.renderer.getSize(size);
-				const focal = (size.y / 2.0) / Math.tan(this.el.sceneEl.camera.el.components.camera.data.fov / 2.0 * Math.PI / 180.0);
-				material.uniforms.viewport.value[0] = size.x;
-				material.uniforms.viewport.value[1] = size.y;
-				material.uniforms.focal.value = focal;
-				mesh.material.uniforms.gsProjectionMatrix.value = this.getProjectionMatrix();
-			});
 
 			this.worker = new Worker(
 				URL.createObjectURL(
@@ -287,16 +287,22 @@ AFRAME.registerComponent("gaussian_splatting", {
 			this.worker.postMessage({view}, [view.buffer]);
 		}
 	},
-	getProjectionMatrix: function() {
-		let mtx = this.el.sceneEl.camera.el.components.camera.camera.projectionMatrix.clone();
+	getProjectionMatrix: function(camera) {
+		if(!camera){
+			camera = this.el.sceneEl.camera.el.components.camera.camera;
+		}
+		let mtx = camera.projectionMatrix.clone();
 		mtx.elements[4] *= -1;
 		mtx.elements[5] *= -1;
 		mtx.elements[6] *= -1;
 		mtx.elements[7] *= -1;
 		return mtx;
 	},
-	getModelViewMatrix: function() {
-		const viewMatrix = this.el.sceneEl.camera.el.object3D.matrixWorld.clone();
+	getModelViewMatrix: function(camera) {
+		if(!camera){
+			camera = this.el.sceneEl.camera.el.components.camera.camera;
+		}
+		const viewMatrix = camera.matrixWorld.clone();
 		viewMatrix.elements[1] *= -1.0;
 		viewMatrix.elements[4] *= -1.0;
 		viewMatrix.elements[6] *= -1.0;
