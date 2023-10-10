@@ -3,6 +3,9 @@
 This component is an A-Frame implementation of real-time rendering for [3D Gaussian Splatting for Real-Time Radiance Field Rendering](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/).  
 This code is derived from the WebGL implementation developed by [antimatter15](https://github.com/antimatter15/splat).
 
+### Demo page
+
+https://quadjr.github.io/aframe-gaussian-splatting/
 
 ### Properties
 
@@ -23,7 +26,7 @@ About the splat file, please refer [antimatter15](https://github.com/antimatter1
 <html>
   <head>
     <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
-    <script src="https://unpkg.com/aframe-gaussian-splatting-component@0.0.13/dist/aframe-gaussian-splatting-component.min.js"></script>
+    <script src="https://unpkg.com/aframe-gaussian-splatting-component@0.0.14/dist/aframe-gaussian-splatting-component.min.js"></script>
   </head>
   <body>
     <a-scene renderer="antialias: false" stats>
