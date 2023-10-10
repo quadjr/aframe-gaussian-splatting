@@ -3,17 +3,20 @@ AFRAME.registerComponent("gaussian_splatting", {
 		src: {type: 'string', default: "train.splat"},
 	},
 	init: function () {
+		// aframe-specific data
 		this.el.sceneEl.renderer.setPixelRatio(1);
+		this.loadData(this.data.src, this.el.sceneEl.camera.el.components.camera.camera, this.el.object3D);
+	},
+	// also works from vanilla three.js
+	loadData: function(src, camera, object) {
+		this.src = src;
+		this.camera = camera;
+		this.object = object;
 
 		fetch(this.data.src)
 		.then((data) => data.blob())
 		.then((res) => res.arrayBuffer())
 		.then((buffer) => {
-			let size = new THREE.Vector2();
-			this.el.sceneEl.renderer.getSize(size);
-
-			const focal = (size.y / 2.0) / Math.tan(this.el.sceneEl.camera.el.components.camera.data.fov / 2.0 * Math.PI / 180.0);
-
 			let u_buffer = new Uint8Array(buffer);
 			if (
 				u_buffer[0] == 112 &&
@@ -127,8 +130,8 @@ AFRAME.registerComponent("gaussian_splatting", {
 
 			const material = new THREE.ShaderMaterial( {
 				uniforms : {
-					viewport: {value: new Float32Array([size.x, size.y])},
-					focal: {value: focal},
+					viewport: {value: new Float32Array([1980, 1080])}, // Dummy. will be overwritten
+					focal: {value: 1000.0}, // Dummy. will be overwritten
 					centerAndScaleTexture: {value: centerAndScaleTexture},
 					covAndColorTexture: {value: covAndColorTexture},
 					gsProjectionMatrix: {value: this.getProjectionMatrix()},
@@ -254,7 +257,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 
 			mesh = new THREE.Mesh(geometry, material, vertexCount);
 			mesh.frustumCulled = false;
-			this.el.object3D.add(mesh);
+			this.object.add(mesh);
 
 			this.worker = new Worker(
 				URL.createObjectURL(
@@ -289,7 +292,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 	},
 	getProjectionMatrix: function(camera) {
 		if(!camera){
-			camera = this.el.sceneEl.camera.el.components.camera.camera;
+			camera = this.camera;
 		}
 		let mtx = camera.projectionMatrix.clone();
 		mtx.elements[4] *= -1;
@@ -300,7 +303,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 	},
 	getModelViewMatrix: function(camera) {
 		if(!camera){
-			camera = this.el.sceneEl.camera.el.components.camera.camera;
+			camera = this.camera;
 		}
 		const viewMatrix = camera.matrixWorld.clone();
 		viewMatrix.elements[1] *= -1.0;
@@ -309,7 +312,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 		viewMatrix.elements[9] *= -1.0;
 		viewMatrix.elements[13] *= -1.0;
 		viewMatrix.invert();
-		const mtx = this.el.object3D.matrixWorld.clone();
+		const mtx = this.object.matrixWorld.clone();
 		mtx.invert();
 		mtx.elements[1] *= -1.0;
 		mtx.elements[4] *= -1.0;
