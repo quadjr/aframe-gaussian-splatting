@@ -108,8 +108,6 @@ AFRAME.registerComponent("gaussian_splatting", {
 
 			let camera_mtx = this.getModelViewMatrix().elements;
 			let view = new Float32Array([camera_mtx[2], camera_mtx[6], camera_mtx[10]]);
-			// TODO to avoid having to eval() the sorter, sorting is inside the worker code;
-			// Which makes it harder to access it here
 			let splatIndexArray = new Uint32Array(vertexCount);
 			const splatIndexes = new THREE.InstancedBufferAttribute(splatIndexArray, 1, false);
 			splatIndexes.setUsage(THREE.DynamicDrawUsage);
@@ -259,6 +257,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 
 			mesh = new THREE.Mesh(geometry, material, vertexCount);
 			mesh.frustumCulled = false;
+			mesh.visible = false;
 			this.object.add(mesh);
 
 			this.worker = new Worker(
@@ -279,6 +278,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 				mesh.geometry.attributes.splatIndex.needsUpdate = true;
 				mesh.geometry.instanceCount = indexes.length;
 				this.sortReady = true;
+				mesh.visible = true;
 			};
 			this.sortReady = true;
 		});
