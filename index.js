@@ -13,9 +13,56 @@ AFRAME.registerComponent("gaussian_splatting", {
 		this.camera = camera;
 		this.object = object;
 
-		fetch(this.src)
-		.then((data) => data.blob())
-		.then((res) => res.arrayBuffer())
+		fetch(src)
+		.then(async (data) => {
+			const reader = data.body.getReader();
+
+			let bytesDownloaded = 0;
+			let _totalDownloadBytes = data.headers.get("Content-Length");
+			let totalDownloadBytes = _totalDownloadBytes ? parseInt(_totalDownloadBytes) : undefined;
+			
+			const chunks = [];
+			const start = Date.now();
+			let lastReportedProgress = 0;
+
+			while (true) {
+				try {
+				  const { value, done } = await reader.read();
+				  if (done) {
+					console.log("Completed download.");
+					break;
+				  }
+				  bytesDownloaded += value.length;
+				  if (totalDownloadBytes != undefined) {
+					const mbps = (bytesDownloaded / 1024 / 1024) / ((Date.now() - start) / 1000);
+					const percent = bytesDownloaded / totalDownloadBytes * 100;
+					if (percent - lastReportedProgress > 1) {
+						console.log("download progress:", percent.toFixed(2) + "%", mbps.toFixed(2) + " Mbps");
+						lastReportedProgress = percent;
+					}
+				  } else {
+					console.log("download progress:", bytesDownloaded, ", unknown total");
+				  }
+				  chunks.push(value);
+				} catch (error) {
+				  console.error(error);
+				  success = false;
+				  break;
+				}
+			  }
+
+			// Concatenate the chunks into a single Uint8Array
+			const concatenatedChunks = new Uint8Array(
+				chunks.reduce((acc, chunk) => acc + chunk.length, 0)
+			);
+			let offset = 0;
+			for (const chunk of chunks) {
+				concatenatedChunks.set(chunk, offset);
+				offset += chunk.length;
+			}
+
+			return concatenatedChunks.buffer;
+		})
 		.then((buffer) => {
 			let u_buffer = new Uint8Array(buffer);
 			if (
