@@ -143,6 +143,9 @@ AFRAME.registerComponent("gaussian_splatting", {
 				covAndColorData_uint8[destOffset + 2] = u_buffer[32 * i + 24 + 2];
 				covAndColorData_uint8[destOffset + 3] = u_buffer[32 * i + 24 + 3];
 
+				// Store scale and transparent to remove splat in sorting process
+				mtx.elements[15] = Math.max(scale.x, scale.y, scale.z) * u_buffer[32 * i + 24 + 3] / 255.0;
+
 				for(let j = 0; j < 16; j++){
 					matrices[i * 16 + j] = mtx.elements[j];
 				}
@@ -154,8 +157,6 @@ AFRAME.registerComponent("gaussian_splatting", {
 			covAndColorTexture.internalFormat = "RGBA32UI";
 			covAndColorTexture.needsUpdate = true;
 
-			let camera_mtx = this.getModelViewMatrix().elements;
-			let view = new Float32Array([camera_mtx[2], camera_mtx[6], camera_mtx[10]]);
 			let splatIndexArray = new Uint32Array(vertexCount);
 			const splatIndexes = new THREE.InstancedBufferAttribute(splatIndexArray, 1, false);
 			splatIndexes.setUsage(THREE.DynamicDrawUsage);
@@ -335,7 +336,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 		if(this.sortReady){
 			this.sortReady = false;
 			let camera_mtx = this.getModelViewMatrix().elements;
-			let view = new Float32Array([camera_mtx[2], camera_mtx[6], camera_mtx[10]]);
+			let view = new Float32Array([camera_mtx[2], camera_mtx[6], camera_mtx[10], camera_mtx[14]]);
 			this.worker.postMessage({view}, [view.buffer]);
 		}
 	},
@@ -360,7 +361,6 @@ AFRAME.registerComponent("gaussian_splatting", {
 		viewMatrix.elements[6] *= -1.0;
 		viewMatrix.elements[9] *= -1.0;
 		viewMatrix.elements[13] *= -1.0;
-		viewMatrix.invert();
 		const mtx = this.object.matrixWorld.clone();
 		mtx.invert();
 		mtx.elements[1] *= -1.0;
@@ -368,8 +368,8 @@ AFRAME.registerComponent("gaussian_splatting", {
 		mtx.elements[6] *= -1.0;
 		mtx.elements[9] *= -1.0;
 		mtx.elements[13] *= -1.0;
+		mtx.multiply(viewMatrix);
 		mtx.invert();
-		mtx.premultiply(viewMatrix);
 		return mtx;
 	},
 	createWorker: function (self) {
@@ -377,32 +377,43 @@ AFRAME.registerComponent("gaussian_splatting", {
 
 		const sortSplats = function sortSplats(matrices, view){
 			const vertexCount = matrices.length/16;
-		
+			let threshold = -0.001;
+
 			let maxDepth = -Infinity;
 			let minDepth = Infinity;
 			let depthList = new Float32Array(vertexCount);
 			let sizeList = new Int32Array(depthList.buffer);
+			let validIndexList = new Int32Array(vertexCount);
+			let validCount = 0;
 			for (let i = 0; i < vertexCount; i++) {
+				// Sign of depth is reversed
 				let depth =
-					((view[0] * matrices[i * 16 + 12] 
+					( view[0] * matrices[i * 16 + 12] 
 					+ view[1] * matrices[i * 16 + 13]
-					+ view[2] * matrices[i * 16 + 14]));
-				depthList[i] = depth;
-				if (depth > maxDepth) maxDepth = depth;
-				if (depth < minDepth) minDepth = depth;
+					+ view[2] * matrices[i * 16 + 14]
+					+ view[3]);
+
+				// Skip behind of camera and small, transparent splat
+				if(depth < 0 && matrices[i * 16 + 15] > threshold * depth){
+					depthList[validCount] = depth;
+					validIndexList[validCount] = i;
+					validCount++;
+					if (depth > maxDepth) maxDepth = depth;
+					if (depth < minDepth) minDepth = depth;
+				};
 			}
-		
+
 			// This is a 16 bit single-pass counting sort
 			let depthInv = (256 * 256 - 1) / (maxDepth - minDepth);
 			let counts0 = new Uint32Array(256*256);
-			for (let i = 0; i < vertexCount; i++) {
+			for (let i = 0; i < validCount; i++) {
 				sizeList[i] = ((depthList[i] - minDepth) * depthInv) | 0;
 				counts0[sizeList[i]]++;
 			}
 			let starts0 = new Uint32Array(256*256);
 			for (let i = 1; i < 256*256; i++) starts0[i] = starts0[i - 1] + counts0[i - 1];
-			let depthIndex = new Uint32Array(vertexCount);
-			for (let i = 0; i < vertexCount; i++) depthIndex[starts0[sizeList[i]]++] = i;
+			let depthIndex = new Uint32Array(validCount);
+			for (let i = 0; i < validCount; i++) depthIndex[starts0[sizeList[i]]++] = validIndexList[i];
 	
 			return depthIndex;
 		};
