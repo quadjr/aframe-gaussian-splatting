@@ -13,7 +13,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 		this.camera = camera;
 		this.object = object;
 
-		fetch(this.data.src)
+		fetch(this.src)
 		.then((data) => data.blob())
 		.then((res) => res.arrayBuffer())
 		.then((buffer) => {
