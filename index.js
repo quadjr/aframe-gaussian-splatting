@@ -108,7 +108,9 @@ AFRAME.registerComponent("gaussian_splatting", {
 
 			let camera_mtx = this.getModelViewMatrix().elements;
 			let view = new Float32Array([camera_mtx[2], camera_mtx[6], camera_mtx[10]]);
-			let splatIndexArray = this.sortSplats(matrices, view);
+			// TODO to avoid having to eval() the sorter, sorting is inside the worker code;
+			// Which makes it harder to access it here
+			let splatIndexArray = new Uint32Array(vertexCount);
 			const splatIndexes = new THREE.InstancedBufferAttribute(splatIndexArray, 1, false);
 			splatIndexes.setUsage(THREE.DynamicDrawUsage);
 
@@ -268,7 +270,6 @@ AFRAME.registerComponent("gaussian_splatting", {
 			);
 
 			this.worker.postMessage({
-				sortFunction: this.sortSplats.toString(),
 				matrices:matrices.buffer
 			}, [matrices.buffer]);
 
@@ -324,53 +325,50 @@ AFRAME.registerComponent("gaussian_splatting", {
 		return mtx;
 	},
 	createWorker: function (self) {
-		let sortFunction;
 		let matrices;
-		self.onmessage = (e) => {
-			if(e.data.sortFunction){
-				eval(e.data.sortFunction);
-				sortFunction = sortSplats;
+
+		const sortSplats = function sortSplats(matrices, view){
+			const vertexCount = matrices.length/16;
+		
+			let maxDepth = -Infinity;
+			let minDepth = Infinity;
+			let depthList = new Float32Array(vertexCount);
+			let sizeList = new Int32Array(depthList.buffer);
+			for (let i = 0; i < vertexCount; i++) {
+				let depth =
+					((view[0] * matrices[i * 16 + 12] 
+					+ view[1] * matrices[i * 16 + 13]
+					+ view[2] * matrices[i * 16 + 14]));
+				depthList[i] = depth;
+				if (depth > maxDepth) maxDepth = depth;
+				if (depth < minDepth) minDepth = depth;
 			}
+		
+			// This is a 16 bit single-pass counting sort
+			let depthInv = (256 * 256 - 1) / (maxDepth - minDepth);
+			let counts0 = new Uint32Array(256*256);
+			for (let i = 0; i < vertexCount; i++) {
+				sizeList[i] = ((depthList[i] - minDepth) * depthInv) | 0;
+				counts0[sizeList[i]]++;
+			}
+			let starts0 = new Uint32Array(256*256);
+			for (let i = 1; i < 256*256; i++) starts0[i] = starts0[i - 1] + counts0[i - 1];
+			let depthIndex = new Uint32Array(vertexCount);
+			for (let i = 0; i < vertexCount; i++) depthIndex[starts0[sizeList[i]]++] = i;
+	
+			return depthIndex;
+		};
+
+		self.onmessage = (e) => {
 			if(e.data.matrices){
 				matrices = new Float32Array(e.data.matrices);
 			}
 			if(e.data.view){
 				const view = new Float32Array(e.data.view);	
-				const sortedIndexes = sortFunction(matrices, view);
+				const sortedIndexes = sortSplats(matrices, view);
 				self.postMessage({sortedIndexes}, [sortedIndexes.buffer]);
 			}
 		};
-	},
-	sortSplats: function sortSplats(matrices, view){
-		const vertexCount = matrices.length/16;
-	
-		let maxDepth = -Infinity;
-		let minDepth = Infinity;
-		let depthList = new Float32Array(vertexCount);
-		let sizeList = new Int32Array(depthList.buffer);
-		for (let i = 0; i < vertexCount; i++) {
-			let depth =
-				((view[0] * matrices[i * 16 + 12] 
-				+ view[1] * matrices[i * 16 + 13]
-				+ view[2] * matrices[i * 16 + 14]));
-			depthList[i] = depth;
-			if (depth > maxDepth) maxDepth = depth;
-			if (depth < minDepth) minDepth = depth;
-		}
-	
-		// This is a 16 bit single-pass counting sort
-		let depthInv = (256 * 256 - 1) / (maxDepth - minDepth);
-		let counts0 = new Uint32Array(256*256);
-		for (let i = 0; i < vertexCount; i++) {
-			sizeList[i] = ((depthList[i] - minDepth) * depthInv) | 0;
-			counts0[sizeList[i]]++;
-		}
-		let starts0 = new Uint32Array(256*256);
-		for (let i = 1; i < 256*256; i++) starts0[i] = starts0[i - 1] + counts0[i - 1];
-		let depthIndex = new Uint32Array(vertexCount);
-		for (let i = 0; i < vertexCount; i++) depthIndex[starts0[sizeList[i]]++] = i;
-
-		return depthIndex;
 	},
 	processPlyBuffer: function (inputBuffer) {
 		const ubuf = new Uint8Array(inputBuffer);
