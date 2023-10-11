@@ -1,6 +1,6 @@
 AFRAME.registerComponent("gaussian_splatting", {
 	schema: {
-		src: {type: 'string', default: "train.splat"},
+		src: { type: 'string', default: "gaussian_splatting_point_cloud.ply"},
 	},
 	init: function () {
 		// aframe-specific data
