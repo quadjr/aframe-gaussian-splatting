@@ -1,69 +1,19 @@
 AFRAME.registerComponent("gaussian_splatting", {
 	schema: {
-		src: { type: 'string', default: "gaussian_splatting_point_cloud.ply"},
+		src: {type: 'string', default: "train.splat"},
 	},
 	init: function () {
-		// aframe-specific data
 		this.el.sceneEl.renderer.setPixelRatio(1);
-		this.loadData(this.data.src, this.el.sceneEl.camera.el.components.camera.camera, this.el.object3D);
-	},
-	// also works from vanilla three.js
-	loadData: function(src, camera, object) {
-		this.src = src;
-		this.camera = camera;
-		this.object = object;
 
-		fetch(src)
-		.then(async (data) => {
-			const reader = data.body.getReader();
-
-			let bytesDownloaded = 0;
-			let _totalDownloadBytes = data.headers.get("Content-Length");
-			let totalDownloadBytes = _totalDownloadBytes ? parseInt(_totalDownloadBytes) : undefined;
-			
-			const chunks = [];
-			const start = Date.now();
-			let lastReportedProgress = 0;
-
-			while (true) {
-				try {
-				  const { value, done } = await reader.read();
-				  if (done) {
-					console.log("Completed download.");
-					break;
-				  }
-				  bytesDownloaded += value.length;
-				  if (totalDownloadBytes != undefined) {
-					const mbps = (bytesDownloaded / 1024 / 1024) / ((Date.now() - start) / 1000);
-					const percent = bytesDownloaded / totalDownloadBytes * 100;
-					if (percent - lastReportedProgress > 1) {
-						console.log("download progress:", percent.toFixed(2) + "%", mbps.toFixed(2) + " Mbps");
-						lastReportedProgress = percent;
-					}
-				  } else {
-					console.log("download progress:", bytesDownloaded, ", unknown total");
-				  }
-				  chunks.push(value);
-				} catch (error) {
-				  console.error(error);
-				  success = false;
-				  break;
-				}
-			  }
-
-			// Concatenate the chunks into a single Uint8Array
-			const concatenatedChunks = new Uint8Array(
-				chunks.reduce((acc, chunk) => acc + chunk.length, 0)
-			);
-			let offset = 0;
-			for (const chunk of chunks) {
-				concatenatedChunks.set(chunk, offset);
-				offset += chunk.length;
-			}
-
-			return concatenatedChunks.buffer;
-		})
+		fetch(this.data.src)
+		.then((data) => data.blob())
+		.then((res) => res.arrayBuffer())
 		.then((buffer) => {
+			let size = new THREE.Vector2();
+			this.el.sceneEl.renderer.getSize(size);
+
+			const focal = (size.y / 2.0) / Math.tan(this.el.sceneEl.camera.el.components.camera.data.fov / 2.0 * Math.PI / 180.0);
+
 			let u_buffer = new Uint8Array(buffer);
 			if (
 				u_buffer[0] == 112 &&
@@ -155,7 +105,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 
 			let camera_mtx = this.getModelViewMatrix().elements;
 			let view = new Float32Array([camera_mtx[2], camera_mtx[6], camera_mtx[10]]);
-			let splatIndexArray = new Uint32Array(vertexCount);
+			let splatIndexArray = this.sortSplats(matrices, view);
 			const splatIndexes = new THREE.InstancedBufferAttribute(splatIndexArray, 1, false);
 			splatIndexes.setUsage(THREE.DynamicDrawUsage);
 
@@ -177,8 +127,8 @@ AFRAME.registerComponent("gaussian_splatting", {
 
 			const material = new THREE.ShaderMaterial( {
 				uniforms : {
-					viewport: {value: new Float32Array([1980, 1080])}, // Dummy. will be overwritten
-					focal: {value: 1000.0}, // Dummy. will be overwritten
+					viewport: {value: new Float32Array([size.x, size.y])},
+					focal: {value: focal},
 					centerAndScaleTexture: {value: centerAndScaleTexture},
 					covAndColorTexture: {value: covAndColorTexture},
 					gsProjectionMatrix: {value: this.getProjectionMatrix()},
@@ -304,8 +254,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 
 			mesh = new THREE.Mesh(geometry, material, vertexCount);
 			mesh.frustumCulled = false;
-			mesh.visible = false;
-			this.object.add(mesh);
+			this.el.object3D.add(mesh);
 
 			this.worker = new Worker(
 				URL.createObjectURL(
@@ -316,6 +265,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 			);
 
 			this.worker.postMessage({
+				sortFunction: this.sortSplats.toString(),
 				matrices:matrices.buffer
 			}, [matrices.buffer]);
 
@@ -325,7 +275,6 @@ AFRAME.registerComponent("gaussian_splatting", {
 				mesh.geometry.attributes.splatIndex.needsUpdate = true;
 				mesh.geometry.instanceCount = indexes.length;
 				this.sortReady = true;
-				mesh.visible = true;
 			};
 			this.sortReady = true;
 		});
@@ -340,7 +289,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 	},
 	getProjectionMatrix: function(camera) {
 		if(!camera){
-			camera = this.camera;
+			camera = this.el.sceneEl.camera.el.components.camera.camera;
 		}
 		let mtx = camera.projectionMatrix.clone();
 		mtx.elements[4] *= -1;
@@ -351,7 +300,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 	},
 	getModelViewMatrix: function(camera) {
 		if(!camera){
-			camera = this.camera;
+			camera = this.el.sceneEl.camera.el.components.camera.camera;
 		}
 		const viewMatrix = camera.matrixWorld.clone();
 		viewMatrix.elements[1] *= -1.0;
@@ -360,7 +309,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 		viewMatrix.elements[9] *= -1.0;
 		viewMatrix.elements[13] *= -1.0;
 		viewMatrix.invert();
-		const mtx = this.object.matrixWorld.clone();
+		const mtx = this.el.object3D.matrixWorld.clone();
 		mtx.invert();
 		mtx.elements[1] *= -1.0;
 		mtx.elements[4] *= -1.0;
@@ -372,50 +321,53 @@ AFRAME.registerComponent("gaussian_splatting", {
 		return mtx;
 	},
 	createWorker: function (self) {
+		let sortFunction;
 		let matrices;
-
-		const sortSplats = function sortSplats(matrices, view){
-			const vertexCount = matrices.length/16;
-		
-			let maxDepth = -Infinity;
-			let minDepth = Infinity;
-			let depthList = new Float32Array(vertexCount);
-			let sizeList = new Int32Array(depthList.buffer);
-			for (let i = 0; i < vertexCount; i++) {
-				let depth =
-					((view[0] * matrices[i * 16 + 12] 
-					+ view[1] * matrices[i * 16 + 13]
-					+ view[2] * matrices[i * 16 + 14]));
-				depthList[i] = depth;
-				if (depth > maxDepth) maxDepth = depth;
-				if (depth < minDepth) minDepth = depth;
-			}
-		
-			// This is a 16 bit single-pass counting sort
-			let depthInv = (256 * 256 - 1) / (maxDepth - minDepth);
-			let counts0 = new Uint32Array(256*256);
-			for (let i = 0; i < vertexCount; i++) {
-				sizeList[i] = ((depthList[i] - minDepth) * depthInv) | 0;
-				counts0[sizeList[i]]++;
-			}
-			let starts0 = new Uint32Array(256*256);
-			for (let i = 1; i < 256*256; i++) starts0[i] = starts0[i - 1] + counts0[i - 1];
-			let depthIndex = new Uint32Array(vertexCount);
-			for (let i = 0; i < vertexCount; i++) depthIndex[starts0[sizeList[i]]++] = i;
-	
-			return depthIndex;
-		};
-
 		self.onmessage = (e) => {
+			if(e.data.sortFunction){
+				eval(e.data.sortFunction);
+				sortFunction = sortSplats;
+			}
 			if(e.data.matrices){
 				matrices = new Float32Array(e.data.matrices);
 			}
 			if(e.data.view){
 				const view = new Float32Array(e.data.view);	
-				const sortedIndexes = sortSplats(matrices, view);
+				const sortedIndexes = sortFunction(matrices, view);
 				self.postMessage({sortedIndexes}, [sortedIndexes.buffer]);
 			}
 		};
+	},
+	sortSplats: function sortSplats(matrices, view){
+		const vertexCount = matrices.length/16;
+	
+		let maxDepth = -Infinity;
+		let minDepth = Infinity;
+		let depthList = new Float32Array(vertexCount);
+		let sizeList = new Int32Array(depthList.buffer);
+		for (let i = 0; i < vertexCount; i++) {
+			let depth =
+				((view[0] * matrices[i * 16 + 12] 
+				+ view[1] * matrices[i * 16 + 13]
+				+ view[2] * matrices[i * 16 + 14]));
+			depthList[i] = depth;
+			if (depth > maxDepth) maxDepth = depth;
+			if (depth < minDepth) minDepth = depth;
+		}
+	
+		// This is a 16 bit single-pass counting sort
+		let depthInv = (256 * 256 - 1) / (maxDepth - minDepth);
+		let counts0 = new Uint32Array(256*256);
+		for (let i = 0; i < vertexCount; i++) {
+			sizeList[i] = ((depthList[i] - minDepth) * depthInv) | 0;
+			counts0[sizeList[i]]++;
+		}
+		let starts0 = new Uint32Array(256*256);
+		for (let i = 1; i < 256*256; i++) starts0[i] = starts0[i - 1] + counts0[i - 1];
+		let depthIndex = new Uint32Array(vertexCount);
+		for (let i = 0; i < vertexCount; i++) depthIndex[starts0[sizeList[i]]++] = i;
+
+		return depthIndex;
 	},
 	processPlyBuffer: function (inputBuffer) {
 		const ubuf = new Uint8Array(inputBuffer);
