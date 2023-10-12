@@ -3,58 +3,18 @@
 <head>
     <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
     <script src="index.js"></script>
+    <script src="fly-component.js"></script> <!-- Include your fly component script -->
 </head>
 <body>
     <a-scene renderer="antialias: false" stats>
+        <a-entity id="right-controller" xr-controller="right"></a-entity>
+        <a-entity id="left-controller" xr-controller="left"></a-entity>
 
         <a-entity gaussian_splatting="src: https://huggingface.co/datasets/wdfsa/ply/resolve/main/gaussian_splatting_point_cloud.ply;" rotation="0 0 0" position="0 1.5 -2"></a-entity>
+
+        <!-- Attach the "simple-fly" component to the right and left controllers -->
+        <a-entity id="right-controller" simple-fly="speed: 0.1"></a-entity>
+        <a-entity id="left-controller" simple-fly="speed: 0.1"></a-entity>
     </a-scene>
-    <script>
-        AFRAME.registerComponent('simple-fly', {
-            schema: {
-                speed: { type: 'number', default: 0.1 }
-            },
-            init: function () {
-                this.controller = null;
-                this.isFlying = false;
-
-                this.el.sceneEl.addEventListener('enter-vr', (e) => {
-                    const { detail: { status, data } } = e;
-
-                    if (status) {
-                        this.controller = data.controllers[0];
-
-                        this.controller.addEventListener('triggerdown', () => {
-                            this.startFlying();
-                        });
-                        this.controller.addEventListener('triggerup', () => {
-                            this.stopFlying();
-                        });
-                    } else {
-                        this.controller = null;
-                    }
-                });
-            },
-            tick: function () {
-                if (this.isFlying) {
-                    this.fly();
-                }
-            },
-            startFlying: function () {
-                this.isFlying = true;
-            },
-            stopFlying: function () {
-                this.isFlying = false;
-            },
-            fly: function () {
-                if (this.controller) {
-                    const direction = new THREE.Vector3();
-                    this.controller.object3D.getWorldDirection(direction);
-                    direction.multiplyScalar(this.data.speed);
-                    this.el.object3D.position.add(direction);
-                }
-            }
-        });
-    </script>
 </body>
 </html>

@@ -3,33 +3,44 @@ AFRAME.registerComponent('simple-fly', {
         speed: { type: 'number', default: 0.1 }
     },
     init: function () {
-        this.controller = null;
+        this.rightController = null;
         this.isFlying = false;
 
-        this.el.addEventListener('loaded', () => {
-            const xrSession = this.el.sceneEl.xrSession;
-            if (xrSession) {
-                const inputSources = xrSession.inputSources;
-                if (inputSources.length > 1) {
-                    this.controller = inputSources[1].gamepad; // Assuming you are using the first controller
-                    this.isFlying = true;
-                }
-            } else {
-                console.log('No XR session found.');
-            }
-        });
+        const controllers = document.querySelectorAll('a-entity[xr-controller]');
+        if (controllers.length >= 2) {
+            this.rightController = controllers[1];
+
+            // Listen for the buttondown event on the controller.
+            this.rightController.addEventListener('buttondown', (event) => {
+                this.startFlying(event);
+            });
+
+            // Listen for the buttonup event on the controller.
+            this.rightController.addEventListener('buttonup', () => {
+                this.stopFlying();
+            });
+        } else {
+            console.log('No second controller found.');
+        }
     },
     tick: function () {
-        if (this.controller && this.isFlying) {
+        if (this.isFlying) {
             this.fly();
         }
     },
+    startFlying: function (event) {
+        this.isFlying = true;
+        this.flyDirection = new THREE.Vector3();
+
+        // Use the controller's forward direction for flight.
+        this.rightController.object3D.getWorldDirection(this.flyDirection);
+    },
+    stopFlying: function () {
+        this.isFlying = false;
+    },
     fly: function () {
-        const controller = this.controller;
-        const orientation = controller.pose.orientation;
-        if (orientation) {
-            const direction = new THREE.Vector3(0, 0, -1);
-            direction.applyQuaternion(orientation);
+        if (this.rightController && this.flyDirection) {
+            const direction = new THREE.Vector3().copy(this.flyDirection);
             direction.multiplyScalar(this.data.speed);
             this.el.object3D.position.add(direction);
         }
