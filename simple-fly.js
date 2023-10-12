@@ -1,49 +1,37 @@
 AFRAME.registerComponent('simple-fly', {
     schema: {
-        speed: { type: 'number', default: 0.1 },
+        speed: { type: 'number', default: 0.1 }
     },
     init: function () {
+        this.controller = null;
         this.isFlying = false;
-        this.rightController = null;
 
-        // Register a reference to the right Oculus Touch controller.
-        this.rightController = document.querySelector('[oculus-touch-controls]:not([hand="left"])');
-
-        if (!this.rightController) {
-            console.error('No right Oculus Touch controller found.');
-            return;
-        }
-
-        // Listen to the "gripdown" and "gripup" events to start and stop flying.
-        this.rightController.addEventListener('gripdown', () => {
-            this.startFlying();
-        });
-
-        this.rightController.addEventListener('gripup', () => {
-            this.stopFlying();
+        this.el.addEventListener('loaded', () => {
+            const xrSession = this.el.sceneEl.xrSession;
+            if (xrSession) {
+                const inputSources = xrSession.inputSources;
+                if (inputSources.length > 1) {
+                    this.controller = inputSources[1].gamepad; // Assuming you are using the first controller
+                    this.isFlying = true;
+                }
+            } else {
+                console.log('No XR session found.');
+            }
         });
     },
     tick: function () {
-        if (this.isFlying) {
+        if (this.controller && this.isFlying) {
             this.fly();
         }
     },
-    startFlying: function () {
-        this.isFlying = true;
-    },
-    stopFlying: function () {
-        this.isFlying = false;
-    },
     fly: function () {
-        if (this.rightController) {
-            const direction = new THREE.Vector3();
-            this.rightController.object3D.getWorldDirection(direction);
-
-            // Normalize the direction and multiply by the speed.
-            direction.normalize().multiplyScalar(this.data.speed);
-
-            // Apply the direction to the entity's position.
+        const controller = this.controller;
+        const orientation = controller.pose.orientation;
+        if (orientation) {
+            const direction = new THREE.Vector3(0, 0, -1);
+            direction.applyQuaternion(orientation);
+            direction.multiplyScalar(this.data.speed);
             this.el.object3D.position.add(direction);
         }
-    },
+    }
 });
