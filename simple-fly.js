@@ -10,17 +10,21 @@ AFRAME.registerComponent('simple-fly', {
         if (controllers.length >= 2) {
             this.rightController = controllers[1];
 
-            // Listen for the buttondown event on the controller.
-            this.rightController.addEventListener('buttondown', (event) => {
-                this.startFlying(event);
+            this.rightController.addEventListener('gripdown', () => {
+                this.startFlying();
+                console.log('Flying started');
             });
-
-            // Listen for the buttonup event on the controller.
-            this.rightController.addEventListener('buttonup', () => {
+            this.rightController.addEventListener('gripup', () => {
                 this.stopFlying();
+                console.log('Flying stopped');
             });
         } else {
-            console.log('No second controller found.');
+            console.warn('No second controller found.');
+        }
+
+        this.gaussianSplattingEntity = document.querySelector('[gaussian_splatting]');
+        if (!this.gaussianSplattingEntity) {
+            console.warn('No Gaussian Splatting entity found.');
         }
     },
     tick: function () {
@@ -28,21 +32,23 @@ AFRAME.registerComponent('simple-fly', {
             this.fly();
         }
     },
-    startFlying: function (event) {
+    startFlying: function () {
         this.isFlying = true;
-        this.flyDirection = new THREE.Vector3();
-
-        // Use the controller's forward direction for flight.
-        this.rightController.object3D.getWorldDirection(this.flyDirection);
+        console.log('Start flying...');
     },
     stopFlying: function () {
         this.isFlying = false;
+        console.log('Stop flying.');
     },
     fly: function () {
-        if (this.rightController && this.flyDirection) {
-            const direction = new THREE.Vector3().copy(this.flyDirection);
-            direction.multiplyScalar(this.data.speed);
-            this.el.object3D.position.add(direction);
+        if (this.rightController && this.gaussianSplattingEntity) {
+            const direction = new THREE.Vector3();
+            this.rightController.object3D.getWorldDirection(direction);
+            direction.multiplyScalar(-this.data.speed); // Invert the direction for the opposite translation
+            this.gaussianSplattingEntity.object3D.position.add(direction);
+            console.log('Flying in the opposite direction.');
+        } else {
+            console.warn('Right controller or Gaussian Splatting entity not found.');
         }
     }
 });
