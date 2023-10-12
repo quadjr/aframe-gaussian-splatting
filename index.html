@@ -1,13 +1,12 @@
 <!DOCTYPE html>
 <html>
-  <head>
+<head>
     <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
-    <script src="https://quadjr.github.io/aframe-gaussian-splatting/index.js"></script>
-  </head>
-  <body>
-      <a-scene renderer="antialias: false" stats>
-          <a-entity simple-fly="speed: 1"></a-entity>
-          <a-entity gaussian_splatting="src: https://huggingface.co/cakewalk/splat-data/resolve/main/train.splat;" rotation="0 0 0" position="0 1.5 -2"></a-entity>
-      </a-scene>
-  </body>
+    <script src="index.js"></script>
+</head>
+<body>
+    <a-scene renderer="antialias: false" stats>
+        <a-entity gaussian_splatting="src: gaussian_splatting_point_cloud.ply;" rotation="0 0 0" position="0 1.5 -2"></a-entity>
+    </a-scene>
+</body>
 </html>
