@@ -5,6 +5,7 @@ This code is derived from the WebGL implementation developed by [antimatter15](h
 
 ### Demo page
 
+Needs few seconds to load sploats.  
 https://quadjr.github.io/aframe-gaussian-splatting/
 
 ### Properties
@@ -26,7 +27,7 @@ About the splat file, please refer [antimatter15](https://github.com/antimatter1
 <html>
   <head>
     <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
-    <script src="https://unpkg.com/aframe-gaussian-splatting-component@0.0.15/dist/aframe-gaussian-splatting-component.min.js"></script>
+    <script src="https://quadjr.github.io/aframe-gaussian-splatting/index.js"></script>
   </head>
   <body>
     <a-scene renderer="antialias: false" stats>
