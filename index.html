@@ -7,14 +7,9 @@
 </head>
 <body>
     <a-scene renderer="antialias: false" stats>
-        <a-entity id="right-controller" xr-controller="right"></a-entity>
-        <a-entity id="left-controller" xr-controller="left"></a-entity>
-
+        <a-entity oculus-touch-controls="hand: right"></a-entity>
         <a-entity gaussian_splatting="src: https://huggingface.co/datasets/wdfsa/ply/resolve/main/gaussian_splatting_point_cloud.ply;" rotation="0 0 0" position="0 1.5 -2"></a-entity>
-
-        <!-- Attach the "simple-fly" component to the right and left controllers -->
-        <a-entity id="right-controller" simple-fly="speed: 10"></a-entity>
-        <a-entity id="left-controller" simple-fly="speed: 10"></a-entity>
+        <a-entity oculus-touch-controls="hand: right" simple-fly="speed: 10"></a-entity>
     </a-scene>
 </body>
 </html>
