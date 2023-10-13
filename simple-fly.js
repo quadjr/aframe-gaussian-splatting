@@ -44,7 +44,7 @@ AFRAME.registerComponent('simple-fly', {
             const direction = new THREE.Vector3();
             this.rightController.object3D.getWorldDirection(direction);
             direction.multiplyScalar(this.data.speed); // Invert the direction for the opposite translation
-            this.gaussianSplattingEntity.object3D.position.sub(direction);
+            this.gaussianSplattingEntity.object3D.position.add(direction * -1);
             console.log('Flying in the opposite direction.');
         } else {
             console.warn('Right controller or Gaussian Splatting entity not found.');
