@@ -1,530 +1,1185 @@
-AFRAME.registerComponent("gaussian_splatting", {
-	schema: {
-		src: {type: 'string', default: "train.splat"},
-	},
-	init: function () {
-		this.el.sceneEl.renderer.setPixelRatio(1);
+AFRAME.registerComponent("gaussian-splatting", {
+    schema: {
+        splatUrl: {
+            type: "string",
+            default:
+                "https://cdn.glitch.me/7eb34fc5-dc2f-4b3b-afc1-8eb4a88210ba/truck.splat",
+        },
+        initialPosition: { type: "string", default: "0 0 0" },
+        downsampleFactor: { type: "int", default: 1 },
+        vertexCount: { type: "int", default: 1000000 },
+        splatSize: { type: "number", default: 1159.5880733038064 },
+        splatPixelDiscard: { type: "float", default: 2.0 },
+        slider: { type: "boolean", default: true },
+        splatColor: { type: "string", default: "grayscale" },
+    },
+    init: function () {
+        let scene = this.el.sceneEl.object3D;
+        let renderer = this.el.sceneEl.renderer;
+        let camera = document.querySelector("a-entity[camera]").object3D; ////this.el.sceneEl.camera;
+        this.viewer;
+        let selectedColor = this.data.splatColor;
+        let colorSelection;
 
-		fetch(this.data.src)
-		.then((data) => data.blob())
-		.then((res) => res.arrayBuffer())
-		.then((buffer) => {
-			let size = new THREE.Vector2();
-			this.el.sceneEl.renderer.getSize(size);
+        let splatU = this.data.splatUrl;
+        let initialPosition = this.data.initialPosition;
+        let downsampleF = this.data.downsampleFactor;
+        let splatP = this.data.splatPixelDiscard;
+        let vertexC;
+        let particle;
 
-			const focal = (size.y / 2.0) / Math.tan(this.el.sceneEl.camera.el.components.camera.data.fov / 2.0 * Math.PI / 180.0);
+        if (this.data.slider == false) {
+            vertexC = this.data.vertexCount;
+            particle = this.data.splatSize;
+        } else {
+            vertexC = this.data.vertexCount;
+            particle = this.data.splatSize;
 
-			let u_buffer = new Uint8Array(buffer);
-			if (
-				u_buffer[0] == 112 &&
-				u_buffer[1] == 108 &&
-				u_buffer[2] == 121 &&
-				u_buffer[3] == 10
-			) {
-				buffer = this.processPlyBuffer(buffer);
-				u_buffer = new Uint8Array(buffer);
-			}
+            // Create the slider element for vertex count
+            var slider = document.createElement("input");
+            slider.type = "range";
+            slider.min = vertexC / 10;
+            slider.max = vertexC;
+            slider.step = vertexC / 10;
+            slider.value = vertexC;
+            slider.id = "slider";
+            slider.style.position = "absolute";
+            slider.style.bottom = "25%";
+            slider.style.left = "50%";
+            slider.style.transform = "translateX(-50%)";
+            slider.style.display = "block";
+            slider.style.zIndex = "1";
+            // Create a div element for the label
+            var labelDiv = document.createElement("div");
+            labelDiv.textContent = "Change vertex count";
+            labelDiv.style.position = "absolute";
+            labelDiv.style.bottom = "20%";
+            labelDiv.style.left = "50%";
+            labelDiv.style.transform = "translateX(-50%)";
+            labelDiv.style.zIndex = "1";
+            labelDiv.style.color = "#fff";
+            labelDiv.style.fontSize = "24px";
+            document.body.appendChild(labelDiv);
+            document.body.appendChild(slider);
 
-			const rowLength = 3 * 4 + 3 * 4 + 4 + 4;
-			let vertexCount = Math.floor(buffer.byteLength / rowLength);
-			let f_buffer = new Float32Array(buffer);
+            // Particle size
+            var slider2 = document.createElement("input");
+            slider2.type = "range";
+            slider2.min = 0;
+            slider2.max = particle;
+            slider2.step = 1.0;
+            slider2.value = particle;
+            slider2.id = "slider2";
+            slider2.style.position = "absolute";
+            slider2.style.bottom = "15%";
+            slider2.style.left = "50%";
+            slider2.style.transform = "translateX(-50%)";
+            slider2.style.display = "block";
+            slider2.style.zIndex = "1";
+            // Create a div element for the label
+            var labelDiv2 = document.createElement("div");
+            labelDiv2.textContent = "Change splat size";
+            labelDiv2.style.position = "absolute";
+            labelDiv2.style.bottom = "10%";
+            labelDiv2.style.left = "50%";
+            labelDiv2.style.transform = "translateX(-50%)";
+            labelDiv2.style.zIndex = "1";
+            labelDiv2.style.color = "#fff";
+            labelDiv2.style.fontSize = "24px";
+            document.body.appendChild(labelDiv2);
+            document.body.appendChild(slider2);
 
-			if(vertexCount > 4096*4096){
-				console.log("vertexCount limited to 4096*4096", vertexCount);
-				vertexCount = 4096*4096;
-			}
+            function updateVertexCount() {
+                let sliderValue = document.getElementById("slider").value;
+                vertexC = parseInt(sliderValue);
+                this.viewer.updateWorkerBuffer();
+            }
 
-			let matrices = new Float32Array(vertexCount * 16);
-			const centerAndScaleData = new Float32Array(4096 * 4096 * 4);
-			const covAndColorData = new Uint32Array(4096 * 4096 * 4);
-			const covAndColorData_uint8 = new Uint8Array(covAndColorData.buffer);
-			const covAndColorData_int16 = new Int16Array(covAndColorData.buffer);
-			for (let i = 0; i < vertexCount; i++) {
-				let quat = new THREE.Quaternion(
-					(u_buffer[32 * i + 28 + 1] - 128) / 128.0,
-					(u_buffer[32 * i + 28 + 2] - 128) / 128.0,
-					-(u_buffer[32 * i + 28 + 3] - 128) / 128.0,
-					(u_buffer[32 * i + 28 + 0] - 128) / 128.0,
-				);
-				let center = new THREE.Vector3(
-					f_buffer[8 * i + 0],
-					f_buffer[8 * i + 1],
-					-f_buffer[8 * i + 2]
-				);
-				let scale = new THREE.Vector3(
-					f_buffer[8 * i + 3 + 0],
-					f_buffer[8 * i + 3 + 1],
-					f_buffer[8 * i + 3 + 2]
-				);
+            function updateParticleSize() {
+                let sliderValue = document.getElementById("slider2").value;
+                particle = sliderValue + ".0";
+                this.viewer.cameraSpecs.fx = particle;
+                this.viewer.cameraSpecs.fy = particle;
+                console.log(this.viewer.cameraSpecs.fy);
+                this.viewer.updateSplatMeshUniforms();
+            }
+        }
+        if (this.data.slider == true) {
+            // Add event listener to the slider
+            document.getElementById("slider").addEventListener("input", function () {
+                updateVertexCount();
+            });
+            document.getElementById("slider2").addEventListener("input", function () {
+                updateParticleSize();
+            });
+        }
 
-				let mtx = new THREE.Matrix4();
-				mtx.makeRotationFromQuaternion(quat);
-				mtx.transpose();
-				mtx.scale(scale);
-				let mtx_t = mtx.clone()
-				mtx.transpose();
-				mtx.premultiply(mtx_t);
-				mtx.setPosition(center);
+        const values = initialPosition.split(" ");
+        const val = {
+            x: parseFloat(values[0]),
+            y: parseFloat(values[1]),
+            z: parseFloat(values[2]),
+        };
 
-				let cov_indexes = [0, 1, 2, 5, 6, 10];
-				let max_value = 0.0;
-				for(let j = 0; j < cov_indexes.length; j++){
-					if(Math.abs(mtx.elements[cov_indexes[j]]) > max_value){
-						max_value = Math.abs(mtx.elements[cov_indexes[j]]);
-					}
-				}
+        if (selectedColor == "color") {
+            colorSelection = `            
+      float B = exp(A) * vColor.a;
+      gl_FragColor = vec4(B * vColor.rgb, B);
+      `;
+        } else if (selectedColor == "grayscale") {
+            colorSelection = `
+      float grayscale = dot(vColor.rgb, vec3(0.2989, 0.5870, 0.1140));
+      float B = exp(A) * vColor.a;
+      gl_FragColor = vec4(B * vec3(grayscale), B);
+      `;
+        } else if (selectedColor == "blackAndWhite") {
+            colorSelection = `
+      float grayscale = dot(vColor.rgb, vec3(0.2989, 0.5870, 0.1140));
+      float B = exp(A) * vColor.a;
+      vec3 blackAndWhite = vec3(0.0);
+      if (grayscale < 0.5) {
+        blackAndWhite = vec3(0.1);
+      } else if (grayscale < 1.0) {
+        blackAndWhite = vec3(1.0);
+      }
+      gl_FragColor = vec4(B * blackAndWhite, B);`;
+        } else if (selectedColor == "green") {
+            colorSelection = `
+      float grayscale = dot(vColor.rgb, vec3(0.2989, 0.5870, 0.1140));
+    float B = exp(A) * vColor.a;
+    gl_FragColor = vec4(B * vec3(0.0, grayscale, 0.0), B);`;
+        }
+        // renderer.anialias = false;
+        // renderer.shadowMap.enabled = false;
+        // renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
-				let destOffset = i * 4;
-				centerAndScaleData[destOffset + 0] = center.x;
-				centerAndScaleData[destOffset + 1] = center.y;
-				centerAndScaleData[destOffset + 2] = center.z;
-				centerAndScaleData[destOffset + 3] = max_value / 32767.0;
+        const element = document.querySelector("a-entity[gaussian-splatting]");
+        element.setAttribute("gaussian-splatting", "splatSize: 500.0");
 
-				destOffset = i * 4 * 2;
-				for(let j = 0; j < cov_indexes.length; j++){
-					covAndColorData_int16[destOffset + j] = parseInt(mtx.elements[cov_indexes[j]] * 32767.0 / max_value);
-				}
+        class SplatBuffer {
+            static RowSizeBytes = 44;
+            static RowSizeFloats = 11;
+            static CovarianceSizeFloat = 6;
+            static CovarianceSizeBytes = 24;
+            static ColorSizeFloats = 4;
+            static ColorSizeBytes = 16;
 
-				// RGBA
-				destOffset = (i * 4 + 3) * 4;
-				covAndColorData_uint8[destOffset + 0] = u_buffer[32 * i + 24 + 0];
-				covAndColorData_uint8[destOffset + 1] = u_buffer[32 * i + 24 + 1];
-				covAndColorData_uint8[destOffset + 2] = u_buffer[32 * i + 24 + 2];
-				covAndColorData_uint8[destOffset + 3] = u_buffer[32 * i + 24 + 3];
+            static ScaleRowOffsetFloats = 3;
+            static ScaleRowOffsetBytes = 12;
+            static ColorRowOffsetBytes = 24;
+            static RotationRowOffsetFloats = 7;
+            static RotationRowOffsetBytes = 28;
 
-				for(let j = 0; j < 16; j++){
-					matrices[i * 16 + j] = mtx.elements[j];
-				}
-			}
+            constructor(bufferData) {
+                this.bufferData = bufferData;
+                this.covarianceBufferData = null;
+                this.colorBufferData = null;
+            }
 
-			const centerAndScaleTexture = new THREE.DataTexture(centerAndScaleData, 4096, 4096, THREE.RGBA, THREE.FloatType);
-			centerAndScaleTexture.needsUpdate = true;
-			const covAndColorTexture = new THREE.DataTexture(covAndColorData, 4096, 4096, THREE.RGBAIntegerFormat, THREE.UnsignedIntType);
-			covAndColorTexture.internalFormat = "RGBA32UI";
-			covAndColorTexture.needsUpdate = true;
+            buildPreComputedBuffers() {
+                const vertexCount = vertexC; //this.getVertexCount(); // vertexC
 
-			let camera_mtx = this.getModelViewMatrix().elements;
-			let view = new Float32Array([camera_mtx[2], camera_mtx[6], camera_mtx[10]]);
-			let splatIndexArray = this.sortSplats(matrices, view);
-			const visibleSplatIndexes = new Uint32Array(splatIndexArray.length); // Create an array to store visible splats
-			let visibleSplatCount = 0;
+                this.covarianceBufferData = new ArrayBuffer(
+                    SplatBuffer.CovarianceSizeBytes * vertexCount
+                );
+                const covarianceArray = new Float32Array(this.covarianceBufferData);
 
-			for (let i = 0; i < splatIndexArray.length; i++) {
-				const opacity = covAndColorData_uint8[i * 4 + 3] / 255.0;
-				if (opacity > 0.55) { // Modify this condition based on your desired opacity threshold
-					visibleSplatIndexes[visibleSplatCount] = splatIndexArray[i];
-					visibleSplatCount++;
-				}
-			}
+                this.colorBufferData = new ArrayBuffer(
+                    SplatBuffer.ColorSizeBytes * vertexCount
+                );
+                const colorArray = new Float32Array(this.colorBufferData);
 
-			// Create a new buffer attribute for the visible splats
-			const visibleSplatIndexesAttr = new THREE.InstancedBufferAttribute(visibleSplatIndexes.slice(0, visibleSplatCount), 1, false);
-			visibleSplatIndexesAttr.setUsage(THREE.DynamicDrawUsage);
+                const splatFloatArray = new Float32Array(this.bufferData);
+                const splatUintArray = new Uint8Array(this.bufferData);
 
-			const baseGeometry = new THREE.BufferGeometry();
-			const positionsArray = new Float32Array(6 * 3);
-			const positions = new THREE.BufferAttribute(positionsArray, 3);
-			baseGeometry.setAttribute('position', positions);
-			positions.setXYZ(2, -2.0, 2.0, 0.0);
-			positions.setXYZ(1, 2.0, 2.0, 0.0);
-			positions.setXYZ(0, -2.0, -2.0, 0.0);
-			positions.setXYZ(5, -2.0, -2.0, 0.0);
-			positions.setXYZ(4, 2.0, 2.0, 0.0);
-			positions.setXYZ(3, 2.0, -2.0, 0.0);
-			positions.needsUpdate = true;
+                const scale = new THREE.Vector3();
+                const rotation = new THREE.Quaternion();
+                const rotationMatrix = new THREE.Matrix3();
+                const scaleMatrix = new THREE.Matrix3();
+                const covarianceMatrix = new THREE.Matrix3();
+                const tempMatrix4 = new THREE.Matrix4();
 
-			const geometry = new THREE.InstancedBufferGeometry().copy(baseGeometry);
-			geometry.setAttribute('splatIndex', visibleSplatIndexesAttr);
-			geometry.instanceCount = vertexCount;
+                const downsampleFactor = downsampleF; // Adjust the downsample factor as needed
 
-			const material = new THREE.ShaderMaterial( {
-				uniforms : {
-					viewport: {value: new Float32Array([size.x, size.y])},
-					focal: {value: focal},
-					centerAndScaleTexture: {value: centerAndScaleTexture},
-					covAndColorTexture: {value: covAndColorTexture},
-					gsProjectionMatrix: {value: this.getProjectionMatrix()},
-					gsModelViewMatrix: {value: this.getModelViewMatrix()},
-				},
-				vertexShader: `
-					precision highp usampler2D;
+                for (let i = 0; i < vertexCount; i += downsampleFactor) {
+                    const baseColor =
+                        SplatBuffer.RowSizeBytes * i + SplatBuffer.ColorRowOffsetBytes;
+                    colorArray[SplatBuffer.ColorSizeFloats * i] =
+                        splatUintArray[baseColor] / 255;
+                    colorArray[SplatBuffer.ColorSizeFloats * i + 1] =
+                        splatUintArray[baseColor + 1] / 255;
+                    colorArray[SplatBuffer.ColorSizeFloats * i + 2] =
+                        splatUintArray[baseColor + 2] / 255;
+                    colorArray[SplatBuffer.ColorSizeFloats * i + 3] =
+                        splatUintArray[baseColor + 3] / 255;
 
-					out vec4 vColor;
-					out vec2 vPosition;
-					uniform vec2 viewport;
-					uniform float focal;
-					uniform mat4 gsProjectionMatrix;
-					uniform mat4 gsModelViewMatrix;
+                    const baseScale =
+                        SplatBuffer.RowSizeFloats * i + SplatBuffer.ScaleRowOffsetFloats;
+                    scale.set(
+                        splatFloatArray[baseScale],
+                        splatFloatArray[baseScale + 1],
+                        splatFloatArray[baseScale + 2]
+                    );
+                    tempMatrix4.makeScale(scale.x, scale.y, scale.z);
+                    scaleMatrix.setFromMatrix4(tempMatrix4);
 
-					attribute uint splatIndex;
-					uniform sampler2D centerAndScaleTexture;
-					uniform usampler2D covAndColorTexture;
+                    const rotationBase =
+                        SplatBuffer.RowSizeFloats * i + SplatBuffer.RotationRowOffsetFloats;
+                    rotation.set(
+                        splatFloatArray[rotationBase + 1],
+                        splatFloatArray[rotationBase + 2],
+                        splatFloatArray[rotationBase + 3],
+                        splatFloatArray[rotationBase]
+                    );
+                    tempMatrix4.makeRotationFromQuaternion(rotation);
+                    rotationMatrix.setFromMatrix4(tempMatrix4);
 
-					vec2 unpackInt16(in uint value) {
-						int v = int(value);
-						int v0 = v >> 16;
-						int v1 = (v & 0xFFFF);
-						if((v & 0x8000) != 0)
-							v1 |= 0xFFFF0000;
-						return vec2(float(v1), float(v0));
-					}
+                    covarianceMatrix.copy(rotationMatrix).multiply(scaleMatrix);
+                    const M = covarianceMatrix.elements;
 
-					void main () {
-						ivec2 texPos = ivec2(splatIndex%uint(4096),splatIndex/uint(4096));
-						vec4 centerAndScaleData = texelFetch(centerAndScaleTexture, texPos, 0);
+                    covarianceArray[SplatBuffer.CovarianceSizeFloat * i] =
+                        M[0] * M[0] + M[3] * M[3] + M[6] * M[6];
+                    covarianceArray[SplatBuffer.CovarianceSizeFloat * i + 1] =
+                        M[0] * M[1] + M[3] * M[4] + M[6] * M[7];
+                    covarianceArray[SplatBuffer.CovarianceSizeFloat * i + 2] =
+                        M[0] * M[2] + M[3] * M[5] + M[6] * M[8];
+                    covarianceArray[SplatBuffer.CovarianceSizeFloat * i + 3] =
+                        M[1] * M[1] + M[4] * M[4] + M[7] * M[7];
+                    covarianceArray[SplatBuffer.CovarianceSizeFloat * i + 4] =
+                        M[1] * M[2] + M[4] * M[5] + M[7] * M[8];
+                    covarianceArray[SplatBuffer.CovarianceSizeFloat * i + 5] =
+                        M[2] * M[2] + M[5] * M[5] + M[8] * M[8];
+                }
 
-						vec4 center = vec4(centerAndScaleData.xyz, 1);
-						vec4 camspace = gsModelViewMatrix * center;
-						vec4 pos2d = gsProjectionMatrix * camspace;
+                this.vertexCount = Math.ceil(vertexCount / downsampleFactor);
+            }
 
-						float bounds = 1.2 * pos2d.w;
-						if (pos2d.z < -pos2d.w || pos2d.x < -bounds || pos2d.x > bounds
-							|| pos2d.y < -bounds || pos2d.y > bounds) {
-							gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
-							return;
-						}
+            getBufferData() {
+                return this.bufferData;
+            }
 
-						uvec4 covAndColorData = texelFetch(covAndColorTexture, texPos, 0);
-						vec2 cov3D_M11_M12 = unpackInt16(covAndColorData.x) * centerAndScaleData.w;
-						vec2 cov3D_M13_M22 = unpackInt16(covAndColorData.y) * centerAndScaleData.w;
-						vec2 cov3D_M23_M33 = unpackInt16(covAndColorData.z) * centerAndScaleData.w;
-						mat3 Vrk = mat3(
-							cov3D_M11_M12.x, cov3D_M11_M12.y, cov3D_M13_M22.x,
-							cov3D_M11_M12.y, cov3D_M13_M22.y, cov3D_M23_M33.x,
-							cov3D_M13_M22.x, cov3D_M23_M33.x, cov3D_M23_M33.y
-						);
+            getCovarianceBufferData() {
+                return this.covarianceBufferData;
+            }
 
-						mat3 J = mat3(
-							focal / camspace.z, 0., -(focal * camspace.x) / (camspace.z * camspace.z), 
-							0., -focal / camspace.z, (focal * camspace.y) / (camspace.z * camspace.z), 
-							0., 0., 0.
-						);
+            getColorBufferData() {
+                return this.colorBufferData;
+            }
 
-						mat3 W = transpose(mat3(gsModelViewMatrix));
-						mat3 T = W * J;
-						mat3 cov = transpose(T) * Vrk * T;
+            getVertexCount() {
+                return vertexC; //this.bufferData.byteLength / SplatBuffer.RowSizeBytes;
+            }
+        }
 
-						vec2 vCenter = vec2(pos2d) / pos2d.w;
+        class PlyParser {
+            constructor(plyBuffer) {
+                this.plyBuffer = plyBuffer;
+            }
 
-						float diagonal1 = cov[0][0] + 0.3;
-						float offDiagonal = cov[0][1];
-						float diagonal2 = cov[1][1] + 0.3;
+            decodeHeader(plyBuffer) {
+                const decoder = new TextDecoder();
+                let headerOffset = 0;
+                let headerText = "";
 
-						float mid = 0.5 * (diagonal1 + diagonal2);
-						float radius = length(vec2((diagonal1 - diagonal2) / 2.0, offDiagonal));
-						float lambda1 = mid + radius;
-						float lambda2 = max(mid - radius, 0.1);
-						vec2 diagonalVector = normalize(vec2(offDiagonal, lambda1 - diagonal1));
-						vec2 v1 = min(sqrt(2.0 * lambda1), 1024.0) * diagonalVector;
-						vec2 v2 = min(sqrt(2.0 * lambda2), 1024.0) * vec2(diagonalVector.y, -diagonalVector.x);
+                while (true) {
+                    const headerChunk = new Uint8Array(plyBuffer, headerOffset, 50);
+                    headerText += decoder.decode(headerChunk);
+                    headerOffset += 50;
+                    if (headerText.includes("end_header")) {
+                        break;
+                    }
+                }
 
-						uint colorUint = covAndColorData.w;
-						vColor = vec4(
-							float(colorUint & uint(0xFF)) / 255.0,
-							float((colorUint >> uint(8)) & uint(0xFF)) / 255.0,
-							float((colorUint >> uint(16)) & uint(0xFF)) / 255.0,
-							float(colorUint >> uint(24)) / 255.0
-						);
-						vPosition = position.xy;
+                const headerLines = headerText.split("\n");
 
-						gl_Position = vec4(
-							vCenter 
-								+ position.x * v2 / viewport * 2.0 
-								+ position.y * v1 / viewport * 2.0, pos2d.z / pos2d.w, 1.0);
-					}
-					`,
-				fragmentShader: `
-					in vec4 vColor;
-					in vec2 vPosition;
+                let vertexCount = 0;
+                let propertyTypes = {};
 
-					void main () {
-						float A = -dot(vPosition, vPosition);
-						if (A < -4.0) discard;
-						float B = exp(A) * vColor.a;
-						gl_FragColor = vec4(vColor.rgb, B);
-					}
-				`,
-				blending : THREE.CustomBlending,
-				blendSrcAlpha : THREE.OneFactor,
-				depthTest : true,
-				depthWrite: false,
-				transparent: true
-			} );
+                for (let i = 0; i < headerLines.length; i++) {
+                    const line = headerLines[i].trim();
+                    if (line.startsWith("element vertex")) {
+                        const vertexCountMatch = line.match(/\d+/);
+                        if (vertexCountMatch) {
+                            vertexCount = parseInt(vertexCountMatch[0]);
+                        }
+                    } else if (line.startsWith("property")) {
+                        const propertyMatch = line.match(/(\w+)\s+(\w+)\s+(\w+)/);
+                        if (propertyMatch) {
+                            const propertyType = propertyMatch[2];
+                            const propertyName = propertyMatch[3];
+                            propertyTypes[propertyName] = propertyType;
+                        }
+                    } else if (line === "end_header") {
+                        break;
+                    }
+                }
 
-			material.onBeforeRender = ((renderer, scene, camera, geometry, object, group) => {
-				let projectionMatrix = this.getProjectionMatrix(camera);
-				mesh.material.uniforms.gsProjectionMatrix.value = projectionMatrix;
-				mesh.material.uniforms.gsModelViewMatrix.value = this.getModelViewMatrix(camera);
+                const vertexByteOffset =
+                    headerText.indexOf("end_header") + "end_header".length + 1;
+                const vertexData = new DataView(plyBuffer, vertexByteOffset);
 
-				let viewport = new THREE.Vector4();
-				renderer.getCurrentViewport(viewport);
-				const focal = (viewport.w / 2.0) * Math.abs(projectionMatrix.elements[5]);
-				material.uniforms.viewport.value[0] = viewport.z;
-				material.uniforms.viewport.value[1] = viewport.w;
-				material.uniforms.focal.value = focal;
-			});
+                return {
+                    vertexCount: vertexCount,
+                    propertyTypes: propertyTypes,
+                    vertexData: vertexData,
+                    headerOffset: headerOffset,
+                };
+            }
 
-			mesh = new THREE.Mesh(geometry, material, vertexCount);
-			mesh.frustumCulled = false;
-			this.el.object3D.add(mesh);
+            readRawVertexFast(
+                vertexData,
+                offset,
+                fieldOffsets,
+                propertiesToRead,
+                propertyTypes,
+                outVertex
+            ) {
+                let rawVertex = outVertex || {};
+                for (let property of propertiesToRead) {
+                    const propertyType = propertyTypes[property];
+                    if (propertyType === "float") {
+                        rawVertex[property] = vertexData.getFloat32(
+                            offset + fieldOffsets[property],
+                            true
+                        );
+                    } else if (propertyType === "uchar") {
+                        rawVertex[property] =
+                            vertexData.getUint8(offset + fieldOffsets[property]) / 255.0;
+                    }
+                }
+            }
 
-			this.worker = new Worker(
-				URL.createObjectURL(
-					new Blob(["(", this.createWorker.toString(), ")(self)"], {
-						type: "application/javascript",
-					}),
-				),
-			);
+            parseToSplatBuffer() {
+                console.time("PLY load");
 
-			this.worker.postMessage({
-				sortFunction: this.sortSplats.toString(),
-				matrices:matrices.buffer
-			}, [matrices.buffer]);
+                const { vertexCount, propertyTypes, vertexData } = this.decodeHeader(
+                    this.plyBuffer
+                );
 
-			this.worker.onmessage = (e) => {
-				let indexes = new Uint32Array(e.data.sortedIndexes);
-				mesh.geometry.attributes.splatIndex.set(indexes);
-				mesh.geometry.attributes.splatIndex.needsUpdate = true;
-				mesh.geometry.instanceCount = indexes.length;
-				this.sortReady = true;
-			};
-			this.sortReady = true;
-		});
-	},
-	tick: function(time, timeDelta) {
-		if(this.sortReady){
-			this.sortReady = false;
-			let camera_mtx = this.getModelViewMatrix().elements;
-			let view = new Float32Array([camera_mtx[2], camera_mtx[6], camera_mtx[10]]);
-			this.worker.postMessage({view}, [view.buffer]);
-		}
-	},
-	getProjectionMatrix: function(camera) {
-		if(!camera){
-			camera = this.el.sceneEl.camera.el.components.camera.camera;
-		}
-		let mtx = camera.projectionMatrix.clone();
-		mtx.elements[4] *= -1;
-		mtx.elements[5] *= -1;
-		mtx.elements[6] *= -1;
-		mtx.elements[7] *= -1;
-		return mtx;
-	},
-	getModelViewMatrix: function(camera) {
-		if(!camera){
-			camera = this.el.sceneEl.camera.el.components.camera.camera;
-		}
-		const viewMatrix = camera.matrixWorld.clone();
-		viewMatrix.elements[1] *= -1.0;
-		viewMatrix.elements[4] *= -1.0;
-		viewMatrix.elements[6] *= -1.0;
-		viewMatrix.elements[9] *= -1.0;
-		viewMatrix.elements[13] *= -1.0;
-		viewMatrix.invert();
-		const mtx = this.el.object3D.matrixWorld.clone();
-		mtx.invert();
-		mtx.elements[1] *= -1.0;
-		mtx.elements[4] *= -1.0;
-		mtx.elements[6] *= -1.0;
-		mtx.elements[9] *= -1.0;
-		mtx.elements[13] *= -1.0;
-		mtx.invert();
-		mtx.premultiply(viewMatrix);
-		return mtx;
-	},
-	createWorker: function (self) {
-		let sortFunction;
-		let matrices;
-		self.onmessage = (e) => {
-			if(e.data.sortFunction){
-				eval(e.data.sortFunction);
-				sortFunction = sortSplats;
-			}
-			if(e.data.matrices){
-				matrices = new Float32Array(e.data.matrices);
-			}
-			if(e.data.view){
-				const view = new Float32Array(e.data.view);	
-				const sortedIndexes = sortFunction(matrices, view);
-				self.postMessage({sortedIndexes}, [sortedIndexes.buffer]);
-			}
-		};
-	},
-	sortSplats: function sortSplats(matrices, view){
-		const vertexCount = matrices.length/16;
-	
-		let maxDepth = -Infinity;
-		let minDepth = Infinity;
-		let depthList = new Float32Array(vertexCount);
-		let sizeList = new Int32Array(depthList.buffer);
-		for (let i = 0; i < vertexCount; i++) {
-			let depth =
-				((view[0] * matrices[i * 16 + 12] 
-				+ view[1] * matrices[i * 16 + 13]
-				+ view[2] * matrices[i * 16 + 14]));
-			depthList[i] = depth;
-			if (depth > maxDepth) maxDepth = depth;
-			if (depth < minDepth) minDepth = depth;
-		}
-	
-		// This is a 16 bit single-pass counting sort
-		let depthInv = (256 * 256 - 1) / (maxDepth - minDepth);
-		let counts0 = new Uint32Array(256*256);
-		for (let i = 0; i < vertexCount; i++) {
-			sizeList[i] = ((depthList[i] - minDepth) * depthInv) | 0;
-			counts0[sizeList[i]]++;
-		}
-		let starts0 = new Uint32Array(256*256);
-		for (let i = 1; i < 256*256; i++) starts0[i] = starts0[i - 1] + counts0[i - 1];
-		let depthIndex = new Uint32Array(vertexCount);
-		for (let i = 0; i < vertexCount; i++) depthIndex[starts0[sizeList[i]]++] = i;
+                let nRestCoeffs = 0;
+                for (const propertyName in propertyTypes) {
+                    if (propertyName.startsWith("f_rest_")) {
+                        nRestCoeffs += 1;
+                    }
+                }
+                const nCoeffsPerColor = nRestCoeffs / 3;
 
-		return depthIndex;
-	},
-	processPlyBuffer: function (inputBuffer) {
-		const ubuf = new Uint8Array(inputBuffer);
-		// 10KB ought to be enough for a header...
-		const header = new TextDecoder().decode(ubuf.slice(0, 1024 * 10));
-		const header_end = "end_header\n";
-		const header_end_index = header.indexOf(header_end);
-		if (header_end_index < 0)
-			throw new Error("Unable to read .ply file header");
-		const vertexCount = parseInt(/element vertex (\d+)\n/.exec(header)[1]);
-		console.log("Vertex Count", vertexCount);
-		let row_offset = 0,
-			offsets = {},
-			types = {};
-		const TYPE_MAP = {
-			double: "getFloat64",
-			int: "getInt32",
-			uint: "getUint32",
-			float: "getFloat32",
-			short: "getInt16",
-			ushort: "getUint16",
-			uchar: "getUint8",
-		};
-		for (let prop of header
-			.slice(0, header_end_index)
-			.split("\n")
-			.filter((k) => k.startsWith("property "))) {
-			const [p, type, name] = prop.split(" ");
-			const arrayType = TYPE_MAP[type] || "getInt8";
-			types[name] = arrayType;
-			offsets[name] = row_offset;
-			row_offset += parseInt(arrayType.replace(/[^\d]/g, "")) / 8;
-		}
-		console.log("Bytes per row", row_offset, types, offsets);
+                const sphericalHarmonicsDegree = 0;
 
-		let dataView = new DataView(
-			inputBuffer,
-			header_end_index + header_end.length,
-		);
-		let row = 0;
-		const attrs = new Proxy(
-			{},
-			{
-				get(target, prop) {
-					if (!types[prop]) throw new Error(prop + " not found");
-					return dataView[types[prop]](
-						row * row_offset + offsets[prop],
-						true,
-					);
-				},
-			},
-		);
+                console.log(
+                    "Detected degree",
+                    sphericalHarmonicsDegree,
+                    "with ",
+                    nCoeffsPerColor,
+                    "coefficients per color"
+                );
 
-		console.time("calculate importance");
-		let sizeList = new Float32Array(vertexCount);
-		let sizeIndex = new Uint32Array(vertexCount);
-		for (row = 0; row < vertexCount; row++) {
-			sizeIndex[row] = row;
-			if (!types["scale_0"]) continue;
-			const size =
-				Math.exp(attrs.scale_0) *
-				Math.exp(attrs.scale_1) *
-				Math.exp(attrs.scale_2);
-			const opacity = 1 / (1 + Math.exp(-attrs.opacity));
-			sizeList[row] = size * opacity;
-		}
-		console.timeEnd("calculate importance");
+                const shFeatureOrder = [];
+                for (let rgb = 0; rgb < 3; ++rgb) {
+                    shFeatureOrder.push(`f_dc_${rgb}`);
+                }
+                for (let i = 0; i < nCoeffsPerColor; ++i) {
+                    for (let rgb = 0; rgb < 3; ++rgb) {
+                        shFeatureOrder.push(`f_rest_${rgb * nCoeffsPerColor + i}`);
+                    }
+                }
 
-		console.time("sort");
-		sizeIndex.sort((b, a) => sizeList[a] - sizeList[b]);
-		console.timeEnd("sort");
+                let plyRowSize = 0;
+                let fieldOffsets = {};
+                const fieldSize = {
+                    double: 8,
+                    int: 4,
+                    uint: 4,
+                    float: 4,
+                    short: 2,
+                    ushort: 2,
+                    uchar: 1,
+                };
+                for (let fieldName in propertyTypes) {
+                    if (propertyTypes.hasOwnProperty(fieldName)) {
+                        const type = propertyTypes[fieldName];
+                        fieldOffsets[fieldName] = plyRowSize;
+                        plyRowSize += fieldSize[type];
+                    }
+                }
 
-		// 6*4 + 4 + 4 = 8*4
-		// XYZ - Position (Float32)
-		// XYZ - Scale (Float32)
-		// RGBA - colors (uint8)
-		// IJKL - quaternion/rot (uint8)
-		const rowLength = 3 * 4 + 3 * 4 + 4 + 4;
-		const buffer = new ArrayBuffer(rowLength * vertexCount);
+                let rawVertex = {};
 
-		console.time("build buffer");
-		for (let j = 0; j < vertexCount; j++) {
-			row = sizeIndex[j];
+                const propertiesToRead = [
+                    "scale_0",
+                    "scale_1",
+                    "scale_2",
+                    "rot_0",
+                    "rot_1",
+                    "rot_2",
+                    "rot_3",
+                    "x",
+                    "y",
+                    "z",
+                    "f_dc_0",
+                    "f_dc_1",
+                    "f_dc_2",
+                    "opacity",
+                ];
 
-			const position = new Float32Array(buffer, j * rowLength, 3);
-			const scales = new Float32Array(buffer, j * rowLength + 4 * 3, 3);
-			const rgba = new Uint8ClampedArray(
-				buffer,
-				j * rowLength + 4 * 3 + 4 * 3,
-				4,
-			);
-			const rot = new Uint8ClampedArray(
-				buffer,
-				j * rowLength + 4 * 3 + 4 * 3 + 4,
-				4,
-			);
+                console.time("Importance computations");
+                let sizeList = new Float32Array(vertexCount);
+                let sizeIndex = new Uint32Array(vertexCount);
+                for (let row = 0; row < vertexCount; row++) {
+                    this.readRawVertexFast(
+                        vertexData,
+                        row * plyRowSize,
+                        fieldOffsets,
+                        propertiesToRead,
+                        propertyTypes,
+                        rawVertex
+                    );
+                    sizeIndex[row] = row;
+                    if (!propertyTypes["scale_0"]) continue;
+                    const size =
+                        Math.exp(rawVertex.scale_0) *
+                        Math.exp(rawVertex.scale_1) *
+                        Math.exp(rawVertex.scale_2);
+                    const opacity = 1 / (1 + Math.exp(-rawVertex.opacity));
+                    sizeList[row] = size * opacity;
+                }
+                console.timeEnd("Importance computations");
 
-			if (types["scale_0"]) {
-				const qlen = Math.sqrt(
-					attrs.rot_0 ** 2 +
-						attrs.rot_1 ** 2 +
-						attrs.rot_2 ** 2 +
-						attrs.rot_3 ** 2,
-				);
+                console.time("Importance sort");
+                sizeIndex.sort((b, a) => sizeList[a] - sizeList[b]);
+                console.timeEnd("Importance sort");
 
-				rot[0] = (attrs.rot_0 / qlen) * 128 + 128;
-				rot[1] = (attrs.rot_1 / qlen) * 128 + 128;
-				rot[2] = (attrs.rot_2 / qlen) * 128 + 128;
-				rot[3] = (attrs.rot_3 / qlen) * 128 + 128;
+                const splatBufferData = new ArrayBuffer(
+                    SplatBuffer.RowSizeBytes * vertexCount
+                );
 
-				scales[0] = Math.exp(attrs.scale_0);
-				scales[1] = Math.exp(attrs.scale_1);
-				scales[2] = Math.exp(attrs.scale_2);
-			} else {
-				scales[0] = 0.01;
-				scales[1] = 0.01;
-				scales[2] = 0.01;
+                for (let j = 0; j < vertexCount; j++) {
+                    const row = sizeIndex[j];
+                    const offset = row * plyRowSize;
+                    this.readRawVertexFast(
+                        vertexData,
+                        offset,
+                        fieldOffsets,
+                        propertiesToRead,
+                        propertyTypes,
+                        rawVertex
+                    );
+                    const position = new Float32Array(
+                        splatBufferData,
+                        j * SplatBuffer.RowSizeBytes,
+                        3
+                    );
+                    const scales = new Float32Array(
+                        splatBufferData,
+                        j * SplatBuffer.RowSizeBytes + SplatBuffer.ScaleRowOffsetBytes,
+                        3
+                    );
+                    const rgba = new Uint8ClampedArray(
+                        splatBufferData,
+                        j * SplatBuffer.RowSizeBytes + SplatBuffer.ColorRowOffsetBytes,
+                        4
+                    );
+                    const rot = new Float32Array(
+                        splatBufferData,
+                        j * SplatBuffer.RowSizeBytes + SplatBuffer.RotationRowOffsetBytes,
+                        4
+                    );
 
-				rot[0] = 255;
-				rot[1] = 0;
-				rot[2] = 0;
-				rot[3] = 0;
-			}
+                    if (propertyTypes["scale_0"]) {
+                        const quat = new THREE.Quaternion(
+                            rawVertex.rot_1,
+                            rawVertex.rot_2,
+                            rawVertex.rot_3,
+                            rawVertex.rot_0
+                        );
+                        quat.normalize();
+                        rot.set([quat.w, quat.x, quat.y, quat.z]);
+                        scales.set([
+                            Math.exp(rawVertex.scale_0),
+                            Math.exp(rawVertex.scale_1),
+                            Math.exp(rawVertex.scale_2),
+                        ]);
+                    } else {
+                        scales.set([0.01, 0.01, 0.01]);
+                        rot.set([1.0, 0.0, 0.0, 0.0]);
+                    }
 
-			position[0] = attrs.x;
-			position[1] = attrs.y;
-			position[2] = attrs.z;
+                    position.set([rawVertex.x, rawVertex.y, rawVertex.z]);
 
-			if (types["f_dc_0"]) {
-				const SH_C0 = 0.28209479177387814;
-				rgba[0] = (0.5 + SH_C0 * attrs.f_dc_0) * 255;
-				rgba[1] = (0.5 + SH_C0 * attrs.f_dc_1) * 255;
-				rgba[2] = (0.5 + SH_C0 * attrs.f_dc_2) * 255;
-			} else {
-				rgba[0] = attrs.red;
-				rgba[1] = attrs.green;
-				rgba[2] = attrs.blue;
-			}
-			if (types["opacity"]) {
-				rgba[3] = Math.pow((1 / (1 + Math.exp(-attrs.opacity))), 3) * 255; // Adjusted threshold
-			} else {
-				rgba[3] = 255;
-			}
-		}
-		console.timeEnd("build buffer");
-		return buffer;
-	}
+                    if (propertyTypes["f_dc_0"]) {
+                        const SH_C0 = 0.28209479177387814;
+                        rgba.set([
+                            (0.5 + SH_C0 * rawVertex.f_dc_0) * 255,
+                            (0.5 + SH_C0 * rawVertex.f_dc_1) * 255,
+                            (0.5 + SH_C0 * rawVertex.f_dc_2) * 255,
+                        ]);
+                    } else {
+                        rgba.set([255, 0, 0]);
+                    }
+                    if (propertyTypes["opacity"]) {
+                        rgba[3] = (1 / (1 + Math.exp(-rawVertex.opacity))) * 255;
+                    } else {
+                        rgba[3] = 255;
+                    }
+                }
+
+                console.timeEnd("PLY load");
+
+                const splatBuffer = new SplatBuffer(splatBufferData);
+                splatBuffer.buildPreComputedBuffers();
+                return splatBuffer;
+            }
+        }
+
+        class PlyLoader {
+            constructor() {
+                this.splatBuffer = null;
+            }
+
+            fetchFile(fileName) {
+                return new Promise((resolve, reject) => {
+                    fetch(fileName)
+                        .then((res) => {
+                            return res.arrayBuffer();
+                        })
+                        .then((data) => {
+                            resolve(data);
+                        })
+                        .catch((err) => {
+                            reject(err);
+                        });
+                });
+            }
+
+            loadFromFile(fileName) {
+                return new Promise((resolve, reject) => {
+                    const loadPromise = this.fetchFile(fileName);
+                    loadPromise
+                        .then((plyFileData) => {
+                            const plyParser = new PlyParser(plyFileData);
+                            const splatBuffer = plyParser.parseToSplatBuffer();
+                            this.splatBuffer = splatBuffer;
+                            resolve(splatBuffer);
+                        })
+                        .catch((err) => {
+                            reject(err);
+                        });
+                });
+            }
+        }
+
+        class SplatLoader {
+            constructor(splatBuffer = null) {
+                this.splatBuffer = splatBuffer;
+                this.downLoadLink = null;
+            }
+
+            loadFromFile(fileName) {
+                return new Promise((resolve, reject) => {
+                    fetch(fileName)
+                        .then((res) => {
+                            return res.arrayBuffer();
+                        })
+                        .then((bufferData) => {
+                            const splatBuffer = new SplatBuffer(bufferData);
+                            splatBuffer.buildPreComputedBuffers();
+                            resolve(splatBuffer);
+                        })
+                        .catch((err) => {
+                            reject(err);
+                        });
+                });
+            }
+
+            setFromBuffer(splatBuffer) {
+                this.splatBuffer = splatBuffer;
+            }
+
+            saveToFile(fileName) {
+                const splatData = new Uint8Array(this.splatBuffer.getBufferData());
+                const blob = new Blob([splatData.buffer], {
+                    type: "application/octet-stream",
+                });
+
+                if (!this.downLoadLink) {
+                    this.downLoadLink = document.createElement("a");
+                    document.body.appendChild(this.downLoadLink);
+                }
+                this.downLoadLink.download = fileName;
+                this.downLoadLink.href = URL.createObjectURL(blob);
+                this.downLoadLink.click();
+            }
+        }
+
+        function createSortWorker(self) {
+            let splatBuffer;
+            let precomputedCovariance;
+            let precomputedColor;
+            let vertexCount = 0;
+            let viewProj;
+            let depthMix = new BigInt64Array();
+            let lastProj = [];
+
+            let rowSizeFloats = 0;
+
+            const runSort = (viewProj) => {
+                if (!splatBuffer) return;
+
+                const splatArray = new Float32Array(splatBuffer);
+                const pCovarianceArray = new Float32Array(precomputedCovariance);
+                const pColorArray = new Float32Array(precomputedColor);
+                const color = new Float32Array(4 * vertexCount);
+                const centerCov = new Float32Array(9 * vertexCount);
+
+                if (depthMix.length !== vertexCount) {
+                    depthMix = new BigInt64Array(vertexCount);
+                    const indexMix = new Uint32Array(depthMix.buffer);
+                    for (let j = 0; j < vertexCount; j++) {
+                        indexMix[2 * j] = j;
+                    }
+                } else {
+                    let dot =
+                        lastProj[2] * viewProj[2] +
+                        lastProj[6] * viewProj[6] +
+                        lastProj[10] * viewProj[10];
+                    if (Math.abs(dot - 1) < 0.01) {
+                        return;
+                    }
+                }
+
+                const floatMix = new Float32Array(depthMix.buffer);
+                const indexMix = new Uint32Array(depthMix.buffer);
+
+                for (let j = 0; j < vertexCount; j++) {
+                    let i = indexMix[2 * j];
+                    const splatArrayBase = rowSizeFloats * i;
+                    floatMix[2 * j + 1] =
+                        10000 +
+                        viewProj[2] * splatArray[splatArrayBase] +
+                        viewProj[6] * splatArray[splatArrayBase + 1] +
+                        viewProj[10] * splatArray[splatArrayBase + 2];
+                }
+
+                lastProj = viewProj;
+
+                depthMix.sort();
+
+                for (let j = 0; j < vertexCount; j++) {
+                    const i = indexMix[2 * j];
+
+                    const centerCovBase = 9 * j;
+                    const pCovarianceBase = 6 * i;
+                    const colorBase = 4 * j;
+                    const pcColorBase = 4 * i;
+                    const splatArrayBase = rowSizeFloats * i;
+
+                    centerCov[centerCovBase] = splatArray[splatArrayBase];
+                    centerCov[centerCovBase + 1] = splatArray[splatArrayBase + 1];
+                    centerCov[centerCovBase + 2] = splatArray[splatArrayBase + 2];
+
+                    color[colorBase] = pColorArray[pcColorBase];
+                    color[colorBase + 1] = pColorArray[pcColorBase + 1];
+                    color[colorBase + 2] = pColorArray[pcColorBase + 2];
+                    color[colorBase + 3] = pColorArray[pcColorBase + 3];
+
+                    centerCov[centerCovBase + 3] = pCovarianceArray[pCovarianceBase];
+                    centerCov[centerCovBase + 4] = pCovarianceArray[pCovarianceBase + 1];
+                    centerCov[centerCovBase + 5] = pCovarianceArray[pCovarianceBase + 2];
+                    centerCov[centerCovBase + 6] = pCovarianceArray[pCovarianceBase + 3];
+                    centerCov[centerCovBase + 7] = pCovarianceArray[pCovarianceBase + 4];
+                    centerCov[centerCovBase + 8] = pCovarianceArray[pCovarianceBase + 5];
+                }
+
+                self.postMessage({ color, centerCov }, [
+                    color.buffer,
+                    centerCov.buffer,
+                ]);
+            };
+
+            const throttledSort = () => {
+                if (!sortRunning) {
+                    sortRunning = true;
+                    let lastView = viewProj;
+                    runSort(lastView);
+                    setTimeout(() => {
+                        sortRunning = false;
+                        if (lastView !== viewProj) {
+                            throttledSort();
+                        }
+                    }, 0);
+                }
+            };
+
+            let sortRunning;
+            self.onmessage = (e) => {
+                if (e.data.bufferUpdate) {
+                    rowSizeFloats = e.data.bufferUpdate.rowSizeFloats;
+                    rowSizeBytes = e.data.bufferUpdate.rowSizeBytes;
+                    splatBuffer = e.data.bufferUpdate.splatBuffer;
+                    precomputedCovariance = e.data.bufferUpdate.precomputedCovariance;
+                    precomputedColor = e.data.bufferUpdate.precomputedColor;
+                    vertexCount = e.data.bufferUpdate.vertexCount; //1000000
+                } else if (e.data.sort) {
+                    viewProj = e.data.sort.view;
+                    throttledSort();
+                }
+            };
+        }
+
+        const DEFAULT_CAMERA_SPECS = {
+            fx: particle, //1159.5880733038064,
+            fy: particle, //1164.6601287484507,
+            near: 0.1,
+            far: 500,
+        };
+
+        class Viewer {
+            constructor(
+                cameraUp = [0, 0, 0],
+                initialCameraPos = [0, 0, 0],
+                initialCameraLookAt = [0, 0, 0],
+                cameraSpecs = DEFAULT_CAMERA_SPECS,
+
+                selfDrivenMode = true
+            ) {
+                this.cameraUp = new THREE.Vector3().fromArray(cameraUp);
+                this.initialCameraPos = new THREE.Vector3().fromArray(initialCameraPos);
+                this.initialCameraLookAt = new THREE.Vector3().fromArray(
+                    initialCameraLookAt
+                );
+                this.cameraSpecs = cameraSpecs;
+                this.selfDrivenMode = selfDrivenMode;
+                this.realProjectionMatrix = new THREE.Matrix4();
+                this.splatBuffer = null;
+
+                this.splatMesh = null;
+                this.sortWorker = null;
+                this.resizeFunc = this.onResize.bind(this);
+            }
+
+            getRenderDimensions(outDimensions) {
+                outDimensions.x = window.innerWidth;
+                outDimensions.y = window.innerHeight;
+            }
+
+            // updateRealProjectionMatrix(renderDimensions) {
+            //   this.realProjectionMatrix.elements = [
+            //     [-(2 * this.cameraSpecs.fx) / renderDimensions.x, 0, 0, 0],
+            //     [0, -(2 * this.cameraSpecs.fy) / renderDimensions.y, 0, 0],
+            //     [
+            //       0,
+            //       0,
+            //       -(this.cameraSpecs.far + this.cameraSpecs.near) /
+            //         (this.cameraSpecs.far - this.cameraSpecs.near),
+            //       -1,
+            //     ],
+            //     [
+            //       0,
+            //       0,
+            //       -(2.0 * this.cameraSpecs.far * this.cameraSpecs.near) /
+            //         (this.cameraSpecs.far - this.cameraSpecs.near),
+            //       0,
+            //     ],
+            //   ].flat();
+            // }
+            updateRealProjectionMatrix(renderDimensions) {
+                const entity = document.querySelectorAll("a-entity")[0].object3D;
+                const entityRotation = entity.rotation;
+                const entityPosition = entity.position;
+
+
+                const scaleX = -(2 * this.cameraSpecs.fx) / renderDimensions.x;
+                const scaleY = -(2 * this.cameraSpecs.fy) / renderDimensions.y;
+                const near = this.cameraSpecs.near;
+                const far = this.cameraSpecs.far;
+
+                this.realProjectionMatrix.elements = [
+                    scaleX, 0, 0, 0,
+                    0, scaleY, 0, 0,
+                    0, 0, -(far + near) / (far - near), -1,
+                    0, 0, -(2 * far * near) / (far - near), 0
+                ];
+
+                // Apply the entity's rotation, position, and scale
+                const rotationMatrix = new THREE.Matrix4().makeRotationFromEuler(entityRotation);
+                this.realProjectionMatrix.multiply(rotationMatrix);
+                this.realProjectionMatrix.setPosition(entityPosition);
+
+            }
+
+
+            onResize = (function () {
+                const renderDimensions = new THREE.Vector2();
+
+                return function () {
+                    renderer.setSize(1, 1);
+                    this.getRenderDimensions(renderDimensions);
+                    camera.aspect = renderDimensions.x / renderDimensions.y;
+                    camera.updateProjectionMatrix();
+                    renderer.setSize(renderDimensions.x, renderDimensions.y);
+                    this.updateRealProjectionMatrix(renderDimensions);
+                    this.updateSplatMeshUniforms();
+                };
+            })();
+            init() {
+                const renderDimensions = new THREE.Vector2();
+                this.getRenderDimensions(renderDimensions);
+                camera.aspect = renderDimensions.x / renderDimensions.y;
+                camera.position.copy(this.initialCameraPos);
+                camera.lookAt(this.initialCameraLookAt);
+                camera.up.copy(this.cameraUp).normalize();
+                this.updateRealProjectionMatrix(renderDimensions);
+
+                renderer.setSize(renderDimensions.x, renderDimensions.y);
+
+                window.addEventListener("resize", this.resizeFunc, false);
+
+                this.sortWorker = new Worker(
+                    URL.createObjectURL(
+                        new Blob(["(", createSortWorker.toString(), ")(self)"], {
+                            type: "application/javascript",
+                        })
+                    )
+                );
+
+                this.sortWorker.onmessage = (e) => {
+                    let { color, centerCov } = e.data;
+                    this.updateSplatMeshAttributes(color, centerCov);
+                    this.updateSplatMeshUniforms();
+                };
+            }
+
+            updateSplatMeshAttributes(colors, centerCovariances) {
+                const vertexCount = centerCovariances.length / 9;
+                const geometry = this.splatMesh.geometry;
+
+                geometry.attributes.splatCenterCovariance.set(centerCovariances);
+                geometry.attributes.splatCenterCovariance.needsUpdate = true;
+                geometry.attributes.splatColor.set(colors);
+                geometry.attributes.splatColor.needsUpdate = true;
+
+                geometry.instanceCount = vertexCount;
+            }
+
+            updateSplatMeshUniforms = (function () {
+                const renderDimensions = new THREE.Vector2();
+
+                return function () {
+                    this.getRenderDimensions(renderDimensions);
+                    if (this.splatMesh) {
+                        this.splatMesh.material.uniforms.realProjectionMatrix.value.copy(
+                            this.realProjectionMatrix
+                        );
+                        this.splatMesh.material.uniforms.focal.value.set(
+                            this.cameraSpecs.fx,
+                            this.cameraSpecs.fy
+                        );
+                        this.splatMesh.material.uniforms.viewport.value.set(
+                            renderDimensions.x,
+                            renderDimensions.y
+                        );
+                        this.splatMesh.material.uniformsNeedUpdate = true;
+                    }
+                };
+            })();
+
+            loadFile(fileName) {
+                // Creating the div element
+                let loadingDiv = document.createElement("div");
+                loadingDiv.id = "loader";
+                loadingDiv.textContent = "Loading...";
+                loadingDiv.style.fontSize = "22px";
+                // Styling the div element
+                loadingDiv.style.position = "fixed";
+                loadingDiv.style.top = "50%";
+                loadingDiv.style.left = "50%";
+                loadingDiv.style.transform = "translate(-50%, -50%)";
+
+                // Appending the div element to the document body
+                document.body.appendChild(loadingDiv);
+                const loadPromise = new Promise((resolve, reject) => {
+                    let fileLoadPromise;
+                    if (fileName.endsWith(".splat")) {
+                        fileLoadPromise = new SplatLoader().loadFromFile(fileName);
+                    } else if (fileName.endsWith(".ply")) {
+                        fileLoadPromise = new PlyLoader().loadFromFile(fileName);
+                    } else {
+                        reject(
+                            new Error(
+                                `Viewer::loadFile -> File format not supported: ${fileName}`
+                            )
+                        );
+                    }
+                    fileLoadPromise
+                        .then((splatBuffer) => {
+                            resolve(splatBuffer);
+                        })
+                        .catch((e) => {
+                            reject(
+                                new Error(`Viewer::loadFile -> Could not load file ${fileName}`)
+                            );
+                        });
+                });
+
+                return loadPromise.then((splatBuffer) => {
+                    this.splatBuffer = splatBuffer;
+                    this.splatMesh = this.buildMesh(this.splatBuffer);
+                    this.splatMesh.frustumCulled = false;
+                    document.querySelector("#loader").style.display = "none";
+                    scene.add(this.splatMesh);
+                    this.updateWorkerBuffer();
+                });
+            }
+
+            updateView = (function () {
+                const tempMatrix = new THREE.Matrix4();
+                const tempVector2 = new THREE.Vector2();
+
+                return function () {
+                    this.getRenderDimensions(tempVector2);
+                    tempMatrix.copy(camera.matrixWorld).invert();
+                    tempMatrix.premultiply(this.realProjectionMatrix);
+                    this.sortWorker.postMessage({
+                        sort: {
+                            view: tempMatrix.elements,
+                        },
+                    });
+                };
+            })();
+
+            updateWorkerBuffer = (function () {
+                return function () {
+                    this.sortWorker.postMessage({
+                        bufferUpdate: {
+                            rowSizeFloats: SplatBuffer.RowSizeFloats,
+                            rowSizeBytes: SplatBuffer.RowSizeBytes,
+                            splatBuffer: this.splatBuffer.getBufferData(),
+                            precomputedCovariance: this.splatBuffer.getCovarianceBufferData(),
+                            precomputedColor: this.splatBuffer.getColorBufferData(),
+                            vertexCount: this.splatBuffer.getVertexCount(),
+                        },
+                    });
+                };
+            })();
+
+            buildMaterial() {
+                const vertexShaderSource = `
+                    #include <common>
+                    precision mediump float;
+        
+                    attribute vec4 splatColor;
+                    attribute mat3 splatCenterCovariance;
+        
+                    uniform mat4 realProjectionMatrix;
+                    uniform vec2 focal;
+                    uniform vec2 viewport;
+        
+                    varying vec4 vColor;
+                    varying vec2 vPosition;
+        
+                    void main () {
+        
+                    vec3 splatCenter = splatCenterCovariance[0];
+                    vec3 cov3D_M11_M12_M13 = splatCenterCovariance[1];
+                    vec3 cov3D_M22_M23_M33 = splatCenterCovariance[2];
+        
+                    vec4 camspace = viewMatrix * vec4(splatCenter, 1);
+                    vec4 pos2d = realProjectionMatrix * camspace;
+        
+                    float bounds = 1.2 * pos2d.w;
+                    if (pos2d.z < -pos2d.w || pos2d.x < -bounds || pos2d.x > bounds
+                        || pos2d.y < -bounds || pos2d.y > bounds) {
+                        gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+                        return;
+                    }
+        
+                    mat3 Vrk = mat3(
+                        cov3D_M11_M12_M13.x, cov3D_M11_M12_M13.y, cov3D_M11_M12_M13.z,
+                        cov3D_M11_M12_M13.y, cov3D_M22_M23_M33.x, cov3D_M22_M23_M33.y,
+                        cov3D_M11_M12_M13.z, cov3D_M22_M23_M33.y, cov3D_M22_M23_M33.z
+                    );
+        
+                    mat3 J = mat3(
+                        focal.x / camspace.z, 0., -(focal.x * camspace.x) / (camspace.z * camspace.z),
+                        0., focal.y / camspace.z, -(focal.y * camspace.y) / (camspace.z * camspace.z),
+                        0., 0., 0.
+                    );
+        
+                    mat3 W = transpose(mat3(viewMatrix));
+                    mat3 T = W * J;
+                    mat3 cov2Dm = transpose(T) * Vrk * T;
+                    cov2Dm[0][0] += 0.5;
+                    cov2Dm[1][1] += 0.3;
+                    vec3 cov2Dv = vec3(cov2Dm[0][0], cov2Dm[0][1], cov2Dm[1][1]);
+        
+                    vec2 vCenter = vec2(pos2d) / pos2d.w;
+        
+                    float diagonal1 = cov2Dv.x;
+                    float offDiagonal = cov2Dv.y;
+                    float diagonal2 = cov2Dv.z;
+        
+                    float mid = 0.5 * (diagonal1 + diagonal2);
+                    float radius = length(vec2((diagonal1 - diagonal2) / 2.0, offDiagonal));
+                    float lambda1 = mid + radius;
+                    float lambda2 = max(mid - radius, 0.1);
+                    vec2 diagonalVector = normalize(vec2(offDiagonal, lambda1 - diagonal1));
+                    vec2 v1 = min(sqrt(2.0 * lambda1), 1024.0) * diagonalVector;
+                    vec2 v2 = min(sqrt(2.0 * lambda2), 1024.0) * vec2(diagonalVector.y, -diagonalVector.x);
+        
+                    vColor = splatColor;
+                    vPosition = position.xy;
+        
+                    vec2 projectedCovariance = vCenter +
+                                               position.x * v1 / viewport * 2.0 +
+                                               position.y * v2 / viewport * 2.0;
+        
+                    gl_Position = vec4(projectedCovariance, 0.0, 1.0);
+                }`;
+                const fragmentShaderSource = `
+                    #include <common>
+                    precision mediump float;
+        
+                    varying vec4 vColor;
+                    varying vec2 vPosition;
+        
+                    void main () {
+                        float A = -dot(vPosition, vPosition);
+                        if (A < - ${splatP.toFixed(1)}) discard;
+                        
+                        ${colorSelection}                        
+                    }`;
+
+                const uniforms = {
+                    realProjectionMatrix: {
+                        type: "v4v",
+                        value: new THREE.Matrix4(),
+                    },
+                    focal: {
+                        type: "v2",
+                        value: new THREE.Vector2(),
+                    },
+
+                    viewport: {
+                        type: "v2",
+                        value: new THREE.Vector2(),
+                    },
+                };
+                return new THREE.ShaderMaterial({
+                    uniforms: uniforms,
+                    vertexShader: vertexShaderSource,
+                    fragmentShader: fragmentShaderSource,
+                    // transparent: true,
+                    // alphaTest: 1.0,
+                    blending: THREE.CustomBlending,
+                    blendEquation: THREE.AddEquation,
+                    blendSrc: THREE.OneMinusDstAlphaFactor,
+                    blendDst: THREE.OneFactor,
+                    blendSrcAlpha: THREE.OneMinusDstAlphaFactor,
+                    blendDstAlpha: THREE.OneFactor,
+                    depthTest: false,
+                    depthWrite: false,
+                    // side: THREE.DoubleSide
+                });
+            }
+
+            buildGeometry(splatBuffer) {
+                const baseGeometry = new THREE.BufferGeometry();
+
+                const positionsArray = new Float32Array(18); // quality
+                const positions = new THREE.BufferAttribute(positionsArray, 3);
+                baseGeometry.setAttribute("position", positions);
+                positions.setXYZ(2, -2.0, 2.0, 0.0);
+                positions.setXYZ(1, -2.0, -2.0, 0.0);
+                positions.setXYZ(0, 2.0, 2.0, 0.0);
+                positions.setXYZ(5, -2.0, -2.0, 0.0);
+                positions.setXYZ(4, 2.0, -2.0, 0.0);
+                positions.setXYZ(3, 2.0, 2.0, 0.0);
+                positions.needsUpdate = true;
+                const geometry = new THREE.InstancedBufferGeometry().copy(baseGeometry);
+                const splatColorsArray = new Float32Array(
+                    splatBuffer.getVertexCount() * 4
+                );
+                const splatColors = new THREE.InstancedBufferAttribute(
+                    splatColorsArray,
+                    4,
+                    false
+                );
+                splatColors.setUsage(THREE.DynamicDrawUsage);
+                geometry.setAttribute("splatColor", splatColors);
+
+                const splatCentersArray = new Float32Array(
+                    splatBuffer.getVertexCount() * 9
+                );
+                const splatCenters = new THREE.InstancedBufferAttribute(
+                    splatCentersArray,
+                    9,
+                    false
+                );
+                splatCenters.setUsage(THREE.DynamicDrawUsage);
+                geometry.setAttribute("splatCenterCovariance", splatCenters);
+
+                return geometry;
+            }
+
+            /*
+            //Quads:
+            buildGeometry(splatBuffer) {
+        const baseGeometry = new THREE.BufferGeometry();
+      
+        const positionsArray = new Float32Array(24); // 4 vertices per quad
+        const positions = new THREE.BufferAttribute(positionsArray, 3);
+        baseGeometry.setAttribute("position", positions);
+        positions.setXYZ(0, -1.0, -1.0, 0.0);
+        positions.setXYZ(1, -1.0, 1.0, 0.0);
+        positions.setXYZ(2, 1.0, -1.0, 0.0);
+        positions.setXYZ(3, 1.0, 1.0, 0.0);
+        positions.needsUpdate = true;
+      
+        const geometry = new THREE.InstancedBufferGeometry().copy(baseGeometry);
+      
+        const splatColorsArray = new Float32Array(splatBuffer.getVertexCount() * 4);
+        const splatColors = new THREE.InstancedBufferAttribute(
+          splatColorsArray,
+          4,
+          false
+        );
+        splatColors.setUsage(THREE.DynamicDrawUsage);
+        geometry.setAttribute("splatColor", splatColors);
+      
+        const splatCentersArray = new Float32Array(splatBuffer.getVertexCount() * 9);
+        const splatCenters = new THREE.InstancedBufferAttribute(
+          splatCentersArray,
+          9,
+          false
+        );
+        splatCenters.setUsage(THREE.DynamicDrawUsage);
+        geometry.setAttribute("splatCenterCovariance", splatCenters);
+      
+        return geometry;
+      }
+            */
+
+            buildMesh(splatBuffer) {
+                const geometry = this.buildGeometry(splatBuffer);
+                const material = this.buildMaterial();
+                const mesh = new THREE.Mesh(geometry, material);
+                return mesh;
+            }
+        }
+
+        function init() {
+            function load() {
+                viewer = new Viewer([0, -1, 0], [val.x, val.y, val.z], [0, 0, 0]);
+                viewer.init();
+                viewer.loadFile(splatU);
+            }
+            load();
+        }
+        init();
+    },
+    tick: function () {
+        if (viewer) {
+            viewer.updateView();
+        }
+    },
 });
