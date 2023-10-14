@@ -111,7 +111,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 
 			for (let i = 0; i < splatIndexArray.length; i++) {
 				const opacity = covAndColorData_uint8[i * 4 + 3] / 255.0;
-				if (opacity > 0.45) { // Modify this condition based on your desired opacity threshold
+				if (opacity > 0.55) { // Modify this condition based on your desired opacity threshold
 					visibleSplatIndexes[visibleSplatCount] = splatIndexArray[i];
 					visibleSplatCount++;
 				}
