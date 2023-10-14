@@ -21,7 +21,7 @@ AFRAME.registerComponent('simple-fly', {
             console.warn('No Oculus Touch controllers found.');
         }
 
-        this.gaussianSplattingEntity = document.querySelector('[gaussian_splatting]');
+        this.gaussianSplattingEntity = document.querySelector('[gaussian-splatting]');
         if (!this.gaussianSplattingEntity) {
             console.warn('No Gaussian Splatting entity found.');
         }
