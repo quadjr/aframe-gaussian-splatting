@@ -507,7 +507,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 				rgba[2] = attrs.blue;
 			}
 			if (types["opacity"]) {
-				rgba[3] = (1 / (1 + Math.exp(-attrs.opacity))) * 255;
+				rgba[3] = Math.pow((1 / (1 + Math.exp(-attrs.opacity))), 3) * 255; // Adjusted threshold
 			} else {
 				rgba[3] = 255;
 			}
