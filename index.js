@@ -172,7 +172,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 			material.uniforms.focal.value = focal;
 		});
 
-		mesh = new THREE.Mesh(geometry, material);
+		const mesh = new THREE.Mesh(geometry, material);
 		mesh.frustumCulled = false;
 		this.object.add(mesh);
 
@@ -485,7 +485,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 				matrices = undefined;
 			}
 			if(e.data.method == "push"){
-				new_matrices = new Float32Array(e.data.matrices);
+				const new_matrices = new Float32Array(e.data.matrices);
 				if(matrices === undefined){
 					matrices = new_matrices;
 				}else{
