@@ -6,26 +6,33 @@ AFRAME.registerComponent("gaussian_splatting", {
 		// aframe-specific data
 		this.el.sceneEl.renderer.setPixelRatio(1);
 		this.el.sceneEl.renderer.xr.setFramebufferScaleFactor(0.5);
-		this.initGL( this.el.sceneEl.camera.el.components.camera.camera, this.el.object3D, this.el.sceneEl.renderer);
-		this.loadData(this.data.src);
+		this.loadData(this.el.sceneEl.camera.el.components.camera.camera, this.el.object3D, this.el.sceneEl.renderer, this.data.src);
 	},
 	// also works from vanilla three.js
-	initGL: function(camera, object, renderer) {
-		this.camera = camera;
-		this.object = object;
-		this.renderer = renderer;
-		this.textureReady = false;
+	initGL: async function(numVertexes){
+		console.log("initGL", numVertexes);
 		this.object.frustumCulled = false;
 
-		this.centerAndScaleData = new Float32Array(4096 * 4096 * 4);
-		this.covAndColorData = new Uint32Array(4096 * 4096 * 4);
-		this.centerAndScaleTexture = new THREE.DataTexture(this.centerAndScaleData, 4096, 4096, THREE.RGBA, THREE.FloatType);
+		let gl = this.renderer.getContext();
+		let mexTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+		this.maxVertexes = mexTextureSize * mexTextureSize;
+
+		if(numVertexes > this.maxVertexes){
+			console.log("numVertexes limited to ", this.maxVertexes, numVertexes);
+			numVertexes = this.maxVertexes;
+		}
+		this.bufferTextureWidth = mexTextureSize;
+		this.bufferTextureHeight = Math.floor((numVertexes - 1)/mexTextureSize) + 1;
+
+		this.centerAndScaleData = new Float32Array(this.bufferTextureWidth * this.bufferTextureHeight * 4);
+		this.covAndColorData = new Uint32Array(this.bufferTextureWidth * this.bufferTextureHeight * 4);
+		this.centerAndScaleTexture = new THREE.DataTexture(this.centerAndScaleData, this.bufferTextureWidth, this.bufferTextureHeight, THREE.RGBA, THREE.FloatType);
 		this.centerAndScaleTexture.needsUpdate = true;
-		this.covAndColorTexture = new THREE.DataTexture(this.covAndColorData, 4096, 4096, THREE.RGBAIntegerFormat, THREE.UnsignedIntType);
+		this.covAndColorTexture = new THREE.DataTexture(this.covAndColorData, this.bufferTextureWidth, this.bufferTextureHeight, THREE.RGBAIntegerFormat, THREE.UnsignedIntType);
 		this.covAndColorTexture.internalFormat = "RGBA32UI";
 		this.covAndColorTexture.needsUpdate = true;
 
-		let splatIndexArray = new Uint32Array(4096 * 4096);
+		let splatIndexArray = new Uint32Array(this.bufferTextureWidth * this.bufferTextureHeight);
 		const splatIndexes = new THREE.InstancedBufferAttribute(splatIndexArray, 1, false);
 		splatIndexes.setUsage(THREE.DynamicDrawUsage);
 
@@ -78,7 +85,8 @@ AFRAME.registerComponent("gaussian_splatting", {
 				}
 
 				void main () {
-					ivec2 texPos = ivec2(splatIndex%uint(4096),splatIndex/uint(4096));
+					ivec2 texSize = textureSize(centerAndScaleTexture, 0);
+					ivec2 texPos = ivec2(splatIndex%uint(texSize.x), splatIndex/uint(texSize.x));
 					vec4 centerAndScaleData = texelFetch(centerAndScaleTexture, texPos, 0);
 
 					vec4 center = vec4(centerAndScaleData.xyz, 1);
@@ -176,14 +184,6 @@ AFRAME.registerComponent("gaussian_splatting", {
 		mesh.frustumCulled = false;
 		this.object.add(mesh);
 
-		this.worker = new Worker(
-			URL.createObjectURL(
-				new Blob(["(", this.createWorker.toString(), ")(self)"], {
-					type: "application/javascript",
-				}),
-			),
-		);
-
 		this.worker.onmessage = (e) => {
 			let indexes = new Uint32Array(e.data.sortedIndexes);
 			mesh.geometry.attributes.splatIndex.set(indexes);
@@ -191,22 +191,51 @@ AFRAME.registerComponent("gaussian_splatting", {
 			mesh.geometry.instanceCount = indexes.length;
 			this.sortReady = true;
 		};
+
+		// Wait texture is ready
+		while(true){
+			const centerAndScaleTextureProperties = this.renderer.properties.get( this.centerAndScaleTexture );
+			const covAndColorTextureProperties = this.renderer.properties.get( this.covAndColorTexture );
+			if(centerAndScaleTextureProperties && centerAndScaleTextureProperties.__webglTexture && 
+				covAndColorTextureProperties && centerAndScaleTextureProperties.__webglTexture){
+				break;
+			}
+			await new Promise(resolve => setTimeout(resolve, 10));
+		}
+
 		this.sortReady = true;
 	}, 
-	loadData: function(src) {
+	loadData: function(camera, object, renderer, src) {
+		this.camera = camera;
+		this.object = object;
+		this.renderer = renderer;
 		this.loadedVertexCount = 0;
 		this.rowLength = 3 * 4 + 3 * 4 + 4 + 4;
+
+		this.worker = new Worker(
+			URL.createObjectURL(
+				new Blob(["(", this.createWorker.toString(), ")(self)"], {
+					type: "application/javascript",
+				}),
+			),
+		);
 		this.worker.postMessage({method: "clear"});
-		const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 		fetch(src)
 		.then(async (data) => {
 			const reader = data.body.getReader();
 
+			let glInitialized = false;
 			let bytesDownloaded = 0;
 			let bytesProcesses = 0;
 			let _totalDownloadBytes = data.headers.get("Content-Length");
 			let totalDownloadBytes = _totalDownloadBytes ? parseInt(_totalDownloadBytes) : undefined;
+
+			if(totalDownloadBytes != undefined){
+				let numVertexes = Math.floor(totalDownloadBytes / this.rowLength);
+				await this.initGL(numVertexes);
+				glInitialized = true;
+			}
 			
 			const chunks = [];
 			const start = Date.now();
@@ -232,14 +261,9 @@ AFRAME.registerComponent("gaussian_splatting", {
 						console.log("download progress:", bytesDownloaded, ", unknown total");
 					}
 					chunks.push(value);
-					if(!this.textureReady &&
-						this.renderer.properties.get( this.centerAndScaleTexture) &&
-						this.renderer.properties.get( this.covAndColorTexture)){
-							this.textureReady = true;
-					}
 
 					const bytesRemains = bytesDownloaded - bytesProcesses;
-					if(!isPly &&this.textureReady && bytesRemains > this.rowLength){
+					if(!isPly && totalDownloadBytes != undefined && bytesRemains > this.rowLength){
 						let vertexCount = Math.floor(bytesRemains / this.rowLength);
 						const concatenatedChunksbuffer = new Uint8Array(bytesRemains);
 						let offset = 0;
@@ -277,14 +301,20 @@ AFRAME.registerComponent("gaussian_splatting", {
 				if(isPly){
 					concatenatedChunks = new Uint8Array(this.processPlyBuffer(concatenatedChunks.buffer));
 				}
-				this.pushDataBuffer(concatenatedChunks.buffer, Math.floor(concatenatedChunks.byteLength/this.rowLength));
+
+				let numVertexes = Math.floor(concatenatedChunks.byteLength/this.rowLength);
+				if(!glInitialized){
+					await this.initGL(numVertexes);
+					glInitialized = true;
+				}
+				this.pushDataBuffer(concatenatedChunks.buffer, numVertexes);
 			}
 		});
 	},
 	pushDataBuffer: function(buffer, vertexCount) {
-		if(this.loadedVertexCount + vertexCount > 4096*4096){
-			console.log("vertexCount limited to 4096*4096", vertexCount);
-			vertexCount = 4096*4096 - this.loadedVertexCount;
+		if(this.loadedVertexCount + vertexCount > this.maxVertexes){
+			console.log("vertexCount limited to ", this.maxVertexes, vertexCount);
+			vertexCount = this.maxVertexes - this.loadedVertexCount;
 		}
 		if(vertexCount <= 0){
 			return;
@@ -361,16 +391,16 @@ AFRAME.registerComponent("gaussian_splatting", {
 		while(vertexCount > 0){
 			let width = 0;
 			let height = 0;
-			let xoffset = (this.loadedVertexCount%4096);
-			let yoffset = Math.floor(this.loadedVertexCount/4096);
-			if(this.loadedVertexCount%4096 != 0){
-				width = Math.min(4096, xoffset + vertexCount) - xoffset;
+			let xoffset = (this.loadedVertexCount%this.bufferTextureWidth);
+			let yoffset = Math.floor(this.loadedVertexCount/this.bufferTextureWidth);
+			if(this.loadedVertexCount%this.bufferTextureWidth != 0){
+				width = Math.min(this.bufferTextureWidth, xoffset + vertexCount) - xoffset;
 				height = 1;
-			}else if(Math.floor(vertexCount/4096) > 0){
-				width = 4096;
-				height = Math.floor(vertexCount/4096);
+			}else if(Math.floor(vertexCount/this.bufferTextureWidth) > 0){
+				width = this.bufferTextureWidth;
+				height = Math.floor(vertexCount/this.bufferTextureWidth);
 			}else{
-				width = vertexCount%4096;
+				width = vertexCount%this.bufferTextureWidth;
 				height = 1;
 			}
 
