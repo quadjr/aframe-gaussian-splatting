@@ -471,7 +471,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 
 		const sortSplats = function sortSplats(matrices, view){
 			const vertexCount = matrices.length/16;
-			let threshold = -0.001;
+			let threshold = -0.0001;
 
 			let maxDepth = -Infinity;
 			let minDepth = Infinity;
