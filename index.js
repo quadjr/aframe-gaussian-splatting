@@ -427,9 +427,16 @@ AFRAME.registerComponent("gaussian_splatting", {
 			this.sortReady = false;
 			let camera_mtx = this.getModelViewMatrix().elements;
 			let view = new Float32Array([camera_mtx[2], camera_mtx[6], camera_mtx[10], camera_mtx[14]]);
+			let worldToCutout = new THREE.Matrix4();
+			if (this.cutout) {
+				worldToCutout.copy(this.cutout.matrixWorld);
+				worldToCutout.invert();
+				worldToCutout.multiply(this.object.matrixWorld);
+			}
 			this.worker.postMessage({
 				method: "sort",
 				view: view.buffer,
+				cutout: this.cutout ? new Float32Array(worldToCutout.elements) : undefined
 			}, [view.buffer]);
 		}
 	},
@@ -468,7 +475,23 @@ AFRAME.registerComponent("gaussian_splatting", {
 	createWorker: function (self) {
 		let matrices = undefined;
 
-		const sortSplats = function sortSplats(matrices, view){
+		// multiply: matrix4x4 * vector3
+		const mul = function mul(e, x, y, z){
+			const w = 1 / ( e[ 3 ] * x + e[ 7 ] * y + e[ 11 ] * z + e[ 15 ] );
+
+			return [
+				(e[0] * x + e[4] * y + e[8] * z + e[12]) * w,
+				(e[1] * x + e[5] * y + e[9] * z + e[13]) * w,
+				(e[2] * x + e[6] * y + e[10] * z + e[14]) * w,
+			];
+		}
+
+		// dot: vector3 * vector3
+		const dot = function dot(vec1, vec2){
+			return vec1[0] * vec2[0] + vec1[1] * vec2[1] + vec1[2] * vec2[2];
+		}
+
+		const sortSplats = function sortSplats(matrices, view, cutout = undefined){
 			const vertexCount = matrices.length/16;
 			let threshold = -0.0001;
 
@@ -486,8 +509,30 @@ AFRAME.registerComponent("gaussian_splatting", {
 					+ view[2] * matrices[i * 16 + 14]
 					+ view[3]);
 
+				let cutoutArea = true;
+				if (cutout !== undefined) {
+					// Position-based culling
+					let posX = matrices[i * 16 + 12];
+					let posY = matrices[i * 16 + 13];
+					let posZ = matrices[i * 16 + 14];
+
+					// convert to cutout space – not sure why Y axis is inverted
+					const cutoutSpacePos = mul(cutout, posX, -posY, posZ);
+					const len = dot(cutoutSpacePos, cutoutSpacePos);
+					
+					// box cutout
+					if (cutoutSpacePos[0] < -0.5 || cutoutSpacePos[0] > 0.5 || 
+						cutoutSpacePos[1] < -0.5 || cutoutSpacePos[1] > 0.5 || 
+						cutoutSpacePos[2] < -0.5 || cutoutSpacePos[2] > 0.5)
+						cutoutArea = false;
+					
+					// spherical cutout
+					// if (dot(cutoutSpacePos, cutoutSpacePos) > 1)
+					// 	cutoutArea = false;
+				}
+
 				// Skip behind of camera and small, transparent splat
-				if(depth < 0 && matrices[i * 16 + 15] > threshold * depth){
+				if(depth < 0 && matrices[i * 16 + 15] > threshold * depth && cutoutArea){
 					depthList[validCount] = depth;
 					validIndexList[validCount] = i;
 					validCount++;
@@ -531,8 +576,9 @@ AFRAME.registerComponent("gaussian_splatting", {
 					const sortedIndexes = new Uint32Array(1);
 					self.postMessage({sortedIndexes}, [sortedIndexes.buffer]);
 				}else{
-					const view = new Float32Array(e.data.view);	
-					const sortedIndexes = sortSplats(matrices, view);
+					const view = new Float32Array(e.data.view);
+					const cutout = e.data.cutout !== undefined ? new Float32Array(e.data.cutout) : undefined;
+					const sortedIndexes = sortSplats(matrices, view, cutout);
 					self.postMessage({sortedIndexes}, [sortedIndexes.buffer]);
 				}
 			}
