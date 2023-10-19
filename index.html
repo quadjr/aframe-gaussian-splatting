@@ -2,7 +2,7 @@
 <html>
   <head>
     <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
-    <script src="https://quadjr.github.io/aframe-gaussian-splatting/index.js"></script>
+    <script src="./index.js"></script>
   </head>
   <body>
     <a-scene renderer="antialias: false" stats>
@@ -10,7 +10,8 @@
         <a-sphere position="0 0 0.5" radius="0.5" color="#EF2D5E"></a-sphere>
         <a-sphere position="0 0 -0.5" radius="0.5" color="#EF2D5E"></a-sphere>
       </a-entity>
-      <a-entity gaussian_splatting="src: ./luma-seal.splat;" scale="2 2 2" rotation="0 0 0" position="0 0.8 -2"></a-entity>
+      <a-box id="cutout-box" visible="false" scale="4.17 2.95 3.89" position="0.8145 1.73322 -2.35981"></a-box>
+      <a-entity gaussian_splatting="src: luma-seal.splat; cutoutEntity: #cutout-box" scale="2 2 2" rotation="0 0 0" position="0 0.8 -2"></a-entity>
       <a-entity gaussian_splatting="src: ./luma-seal.splat;" scale="2 2 2" rotation="0 0 0" position="10 0.8 -2"></a-entity>
       <a-sky color="#000"></a-sky>
     </a-scene>
