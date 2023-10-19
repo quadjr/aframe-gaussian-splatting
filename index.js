@@ -62,6 +62,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 				gsModelViewMatrix: {value: this.getModelViewMatrix()},
 			},
 			vertexShader: `
+				precision highp sampler2D;
 				precision highp usampler2D;
 
 				out vec4 vColor;
@@ -79,8 +80,6 @@ AFRAME.registerComponent("gaussian_splatting", {
 					int v = int(value);
 					int v0 = v >> 16;
 					int v1 = (v & 0xFFFF);
-					if((v & 0x80000000) != 0)
-						v0 |= 0xFFFF0000;
 					if((v & 0x8000) != 0)
 						v1 |= 0xFFFF0000;
 					return vec2(float(v1), float(v0));
