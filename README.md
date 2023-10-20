@@ -15,6 +15,8 @@ Needs few seconds to load splats.
 | --------  | -----------                 | ------------- |
 | src       | url of splat or ply file    | train.splat   |
 | cutoutEntity | selector to a box primitive that uses scale and position to define the bounds of splat points to render    |     |
+| pixelRatio | Pixel ratio for rendering. Reducing the value decreases the resolution and improves performance. If a negative value is set, the device's native value will be applied. |  1.0  |
+| xrPixelRatio | Same as pixelRatio. Applied to XR devices.  |  0.5   |
 
 ### Example custom scan to gaussian splat workflow
 * Use a service such as https://lumalabs.ai/ to process a scan into splat (an alternative is https://poly.cam/)
