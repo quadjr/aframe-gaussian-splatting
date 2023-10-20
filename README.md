@@ -3,17 +3,24 @@
 This component is an A-Frame implementation of real-time rendering for [3D Gaussian Splatting for Real-Time Radiance Field Rendering](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/).  
 This code is derived from the WebGL implementation developed by [antimatter15](https://github.com/antimatter15/splat).
 
-### Demo page
+### Demo pages
 
-Needs few seconds to load sploats.  
-https://quadjr.github.io/aframe-gaussian-splatting/
+Needs few seconds to load splats.  
+* Demo: https://quadjr.github.io/aframe-gaussian-splatting/
+* Cutout demo: https://quadjr.github.io/aframe-gaussian-splatting/cutout-demo.html
 
 ### Properties
 
 | Property  | Description                 | Default Value |
 | --------  | -----------                 | ------------- |
 | src       | url of splat or ply file    | train.splat   |
+| cutoutEntity | selector to a box primitive that uses scale and position to define the bounds of splat points to render    |     |
 
+### Example custom scan to gaussian splat workflow
+* Use a service such as https://lumalabs.ai/ to process a scan into splat (an alternative is https://poly.cam/)
+* Go to download dialog and choose Gaussian > Splat (which will download a .zip file with .ply file inside)
+* Convert the .ply to .splat in the browser using this site: https://splat-converter.glitch.me/ by @akbartus (repo https://github.com/akbartus/Gaussian-Splatting-WebViewers/tree/main/splat_converter)
+* Use resultant .splat in the A-Frame scene with this component
 
 ### Usage
 
