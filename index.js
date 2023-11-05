@@ -13,10 +13,13 @@ AFRAME.registerComponent("gaussian_splatting", {
 		if(this.data.xrPixelRatio > 0){
 			this.el.sceneEl.renderer.xr.setFramebufferScaleFactor(this.data.xrPixelRatio);
 		}
-		this.loadData(this.el.sceneEl.camera.el.components.camera.camera, this.el.object3D, this.el.sceneEl.renderer, this.data.src);
-		if (!!this.data.cutoutEntity) {
-		  this.cutout = this.data.cutoutEntity.object3D;
-		}
+
+		document.querySelector('a-scene').addEventListener('loaded', () => {
+			this.loadData(this.el.sceneEl.camera.el.components.camera.camera, this.el.object3D, this.el.sceneEl.renderer, this.data.src);
+			if (!!this.data.cutoutEntity) {
+				this.cutout = this.data.cutoutEntity.object3D;
+			}
+		})
 	},
 	// also works from vanilla three.js
 	initGL: async function(numVertexes){
