@@ -3,7 +3,8 @@ AFRAME.registerComponent("gaussian_splatting", {
 		src: {type: 'string', default: "train.splat"},
 		cutoutEntity: {type: 'selector'},
 		pixelRatio: {type: 'number', default: 1},
-		xrPixelRatio: {type: 'number', default: 0.5}
+		xrPixelRatio: {type: 'number', default: 0.5},
+		depthWrite: {type: 'boolean', default: false},
 	},
 	init: function () {
 		// aframe-specific data
@@ -177,7 +178,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 			blending : THREE.CustomBlending,
 			blendSrcAlpha : THREE.OneFactor,
 			depthTest : true,
-			depthWrite: false,
+			depthWrite: this.data.depthWrite,
 			transparent: true
 		} );
 
