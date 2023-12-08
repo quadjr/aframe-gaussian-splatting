@@ -5,6 +5,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 		pixelRatio: {type: 'number', default: 1},
 		xrPixelRatio: {type: 'number', default: 0.5},
 		depthWrite: {type: 'boolean', default: false},
+		discardFilter: {type: 'number', default: 0.2},
 	},
 	init: function () {
 		// aframe-specific data
@@ -74,6 +75,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 				covAndColorTexture: {value: this.covAndColorTexture},
 				gsProjectionMatrix: {value: this.getProjectionMatrix()},
 				gsModelViewMatrix: {value: this.getModelViewMatrix()},
+				discardFilter: {value: this.data.discardFilter},
 			},
 			vertexShader: `
 				precision highp sampler2D;
@@ -81,10 +83,12 @@ AFRAME.registerComponent("gaussian_splatting", {
 
 				out vec4 vColor;
 				out vec2 vPosition;
+				out float fDF;
 				uniform vec2 viewport;
 				uniform float focal;
 				uniform mat4 gsProjectionMatrix;
 				uniform mat4 gsModelViewMatrix;
+				uniform float discardFilter;
 
 				attribute uint splatIndex;
 				uniform sampler2D centerAndScaleTexture;
@@ -157,6 +161,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 						float(colorUint >> uint(24)) / 255.0
 					);
 					vPosition = position.xy;
+					fDF = discardFilter;
 
 					gl_Position = vec4(
 						vCenter 
@@ -167,11 +172,13 @@ AFRAME.registerComponent("gaussian_splatting", {
 			fragmentShader: `
 				in vec4 vColor;
 				in vec2 vPosition;
+				in float fDF;
 
 				void main () {
 					float A = -dot(vPosition, vPosition);
 					if (A < -4.0) discard;
 					float B = exp(A) * vColor.a;
+					if(B < fDF) discard;
 					gl_FragColor = vec4(vColor.rgb, B);
 				}
 			`,
