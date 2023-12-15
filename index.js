@@ -5,7 +5,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 		pixelRatio: {type: 'number', default: 1},
 		xrPixelRatio: {type: 'number', default: 0.5},
 		depthWrite: {type: 'boolean', default: false},
-		discardFilter: {type: 'number', default: 0.2},
+		discardFilter: {type: 'number', default: 0.0},
 	},
 	init: function () {
 		// aframe-specific data
@@ -245,6 +245,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 
 		fetch(src)
 		.then(async (data) => {
+			console.log(data);
 			const reader = data.body.getReader();
 
 			let glInitialized = false;
