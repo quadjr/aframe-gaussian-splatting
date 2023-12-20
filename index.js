@@ -3,7 +3,9 @@ AFRAME.registerComponent("gaussian_splatting", {
 		src: {type: 'string', default: "train.splat"},
 		cutoutEntity: {type: 'selector'},
 		pixelRatio: {type: 'number', default: 1},
-		xrPixelRatio: {type: 'number', default: 0.5}
+		xrPixelRatio: {type: 'number', default: 0.5},
+		depthWrite: {type: 'boolean', default: false},
+		discardFilter: {type: 'number', default: 0.0},
 	},
 	init: function () {
 		// aframe-specific data
@@ -73,6 +75,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 				covAndColorTexture: {value: this.covAndColorTexture},
 				gsProjectionMatrix: {value: this.getProjectionMatrix()},
 				gsModelViewMatrix: {value: this.getModelViewMatrix()},
+				discardFilter: {value: this.data.discardFilter},
 			},
 			vertexShader: `
 				precision highp sampler2D;
@@ -80,10 +83,12 @@ AFRAME.registerComponent("gaussian_splatting", {
 
 				out vec4 vColor;
 				out vec2 vPosition;
+				out float fDF;
 				uniform vec2 viewport;
 				uniform float focal;
 				uniform mat4 gsProjectionMatrix;
 				uniform mat4 gsModelViewMatrix;
+				uniform float discardFilter;
 
 				attribute uint splatIndex;
 				uniform sampler2D centerAndScaleTexture;
@@ -156,6 +161,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 						float(colorUint >> uint(24)) / 255.0
 					);
 					vPosition = position.xy;
+					fDF = discardFilter;
 
 					gl_Position = vec4(
 						vCenter 
@@ -166,18 +172,20 @@ AFRAME.registerComponent("gaussian_splatting", {
 			fragmentShader: `
 				in vec4 vColor;
 				in vec2 vPosition;
+				in float fDF;
 
 				void main () {
 					float A = -dot(vPosition, vPosition);
 					if (A < -4.0) discard;
 					float B = exp(A) * vColor.a;
+					if(B < fDF) discard;
 					gl_FragColor = vec4(vColor.rgb, B);
 				}
 			`,
 			blending : THREE.CustomBlending,
 			blendSrcAlpha : THREE.OneFactor,
 			depthTest : true,
-			depthWrite: false,
+			depthWrite: this.data.depthWrite,
 			transparent: true
 		} );
 
@@ -219,7 +227,7 @@ AFRAME.registerComponent("gaussian_splatting", {
 
 		this.sortReady = true;
 	}, 
-	loadData: function(camera, object, renderer, src) {
+	loadData: async function(camera, object, renderer, src) {
 		this.camera = camera;
 		this.object = object;
 		this.renderer = renderer;
@@ -235,95 +243,107 @@ AFRAME.registerComponent("gaussian_splatting", {
 		);
 		this.worker.postMessage({method: "clear"});
 
-		fetch(src)
-		.then(async (data) => {
-			const reader = data.body.getReader();
+		try {
+			while(true){
+				data = await fetch(src)
+				if(data.ok)break
+				console.log("retry", src);
+				await new Promise(resolve => setTimeout(resolve, 1000));
+				
+			}
+			this.parseData(data,src);
+		}
+		catch (error) {
+			console.error(error);
+		}
+	},
+	parseData: async function(data,src) {
+		const reader = data.body.getReader();
 
-			let glInitialized = false;
-			let bytesDownloaded = 0;
-			let bytesProcesses = 0;
-			let _totalDownloadBytes = data.headers.get("Content-Length");
-			let totalDownloadBytes = _totalDownloadBytes ? parseInt(_totalDownloadBytes) : undefined;
+		let glInitialized = false;
+		let bytesDownloaded = 0;
+		let bytesProcesses = 0;
+		let _totalDownloadBytes = data.headers.get("Content-Length");
+		let totalDownloadBytes = _totalDownloadBytes ? parseInt(_totalDownloadBytes) : undefined;
 
-			if(totalDownloadBytes != undefined){
-				let numVertexes = Math.floor(totalDownloadBytes / this.rowLength);
+		if(totalDownloadBytes != undefined){
+			let numVertexes = Math.floor(totalDownloadBytes / this.rowLength);
+			await this.initGL(numVertexes);
+			glInitialized = true;
+		}
+		
+		const chunks = [];
+		const start = Date.now();
+		let lastReportedProgress = 0;
+		let isPly = src.endsWith(".ply");
+
+		while (true) {
+			try {
+				const { value, done } = await reader.read();
+				if (done) {
+					console.log("Completed download.");
+					break;
+				}
+				bytesDownloaded += value.length;
+				if (totalDownloadBytes != undefined) {
+					const mbps = (bytesDownloaded / 1024 / 1024) / ((Date.now() - start) / 1000);
+					const percent = bytesDownloaded / totalDownloadBytes * 100;
+					if (percent - lastReportedProgress > 1) {
+						console.log("download progress:", percent.toFixed(2) + "%", mbps.toFixed(2) + " Mbps");
+						lastReportedProgress = percent;
+					}
+					} else {
+					console.log("download progress:", bytesDownloaded, ", unknown total");
+				}
+				chunks.push(value);
+
+				const bytesRemains = bytesDownloaded - bytesProcesses;
+				if(!isPly && totalDownloadBytes != undefined && bytesRemains > this.rowLength){
+					let vertexCount = Math.floor(bytesRemains / this.rowLength);
+					const concatenatedChunksbuffer = new Uint8Array(bytesRemains);
+					let offset = 0;
+					for (const chunk of chunks) {
+						concatenatedChunksbuffer.set(chunk, offset);
+						offset += chunk.length;
+					}
+					chunks.length = 0;
+					if(bytesRemains > vertexCount * this.rowLength){
+						const extra_data = new Uint8Array(bytesRemains - vertexCount * this.rowLength);
+						extra_data.set(concatenatedChunksbuffer.subarray(bytesRemains - extra_data.length, bytesRemains), 0);
+						chunks.push(extra_data);
+					}
+					const buffer = new Uint8Array(vertexCount * this.rowLength);
+					buffer.set(concatenatedChunksbuffer.subarray(0, buffer.byteLength), 0);
+					this.pushDataBuffer(buffer.buffer, vertexCount);
+					bytesProcesses += vertexCount * this.rowLength;
+				}
+			} catch (error) {
+				console.error(error);
+				break;
+			}
+		}
+
+		if(bytesDownloaded - bytesProcesses > 0){
+			// Concatenate the chunks into a single Uint8Array
+			let concatenatedChunks = new Uint8Array(
+				chunks.reduce((acc, chunk) => acc + chunk.length, 0)
+			);
+			let offset = 0;
+			for (const chunk of chunks) {
+				concatenatedChunks.set(chunk, offset);
+				offset += chunk.length;
+			}
+			if(isPly){
+				concatenatedChunks = new Uint8Array(this.processPlyBuffer(concatenatedChunks.buffer));
+			}
+
+			let numVertexes = Math.floor(concatenatedChunks.byteLength/this.rowLength);
+			if(!glInitialized){
 				await this.initGL(numVertexes);
 				glInitialized = true;
 			}
-			
-			const chunks = [];
-			const start = Date.now();
-			let lastReportedProgress = 0;
-			let isPly = src.endsWith(".ply");
-
-			while (true) {
-				try {
-					const { value, done } = await reader.read();
-					if (done) {
-						console.log("Completed download.");
-						break;
-					}
-					bytesDownloaded += value.length;
-					if (totalDownloadBytes != undefined) {
-						const mbps = (bytesDownloaded / 1024 / 1024) / ((Date.now() - start) / 1000);
-						const percent = bytesDownloaded / totalDownloadBytes * 100;
-						if (percent - lastReportedProgress > 1) {
-							console.log("download progress:", percent.toFixed(2) + "%", mbps.toFixed(2) + " Mbps");
-							lastReportedProgress = percent;
-						}
-						} else {
-						console.log("download progress:", bytesDownloaded, ", unknown total");
-					}
-					chunks.push(value);
-
-					const bytesRemains = bytesDownloaded - bytesProcesses;
-					if(!isPly && totalDownloadBytes != undefined && bytesRemains > this.rowLength){
-						let vertexCount = Math.floor(bytesRemains / this.rowLength);
-						const concatenatedChunksbuffer = new Uint8Array(bytesRemains);
-						let offset = 0;
-						for (const chunk of chunks) {
-							concatenatedChunksbuffer.set(chunk, offset);
-							offset += chunk.length;
-						}
-						chunks.length = 0;
-						if(bytesRemains > vertexCount * this.rowLength){
-							const extra_data = new Uint8Array(bytesRemains - vertexCount * this.rowLength);
-							extra_data.set(concatenatedChunksbuffer.subarray(bytesRemains - extra_data.length, bytesRemains), 0);
-							chunks.push(extra_data);
-						}
-						const buffer = new Uint8Array(vertexCount * this.rowLength);
-						buffer.set(concatenatedChunksbuffer.subarray(0, buffer.byteLength), 0);
-						this.pushDataBuffer(buffer.buffer, vertexCount);
-						bytesProcesses += vertexCount * this.rowLength;
-					}
-				} catch (error) {
-				  console.error(error);
-				  break;
-				}
-			}
-
-			if(bytesDownloaded - bytesProcesses > 0){
-				// Concatenate the chunks into a single Uint8Array
-				let concatenatedChunks = new Uint8Array(
-					chunks.reduce((acc, chunk) => acc + chunk.length, 0)
-				);
-				let offset = 0;
-				for (const chunk of chunks) {
-					concatenatedChunks.set(chunk, offset);
-					offset += chunk.length;
-				}
-				if(isPly){
-					concatenatedChunks = new Uint8Array(this.processPlyBuffer(concatenatedChunks.buffer));
-				}
-
-				let numVertexes = Math.floor(concatenatedChunks.byteLength/this.rowLength);
-				if(!glInitialized){
-					await this.initGL(numVertexes);
-					glInitialized = true;
-				}
-				this.pushDataBuffer(concatenatedChunks.buffer, numVertexes);
-			}
-		});
+			this.pushDataBuffer(concatenatedChunks.buffer, numVertexes);
+		}
 	},
 	pushDataBuffer: function(buffer, vertexCount) {
 		if(this.loadedVertexCount + vertexCount > this.maxVertexes){

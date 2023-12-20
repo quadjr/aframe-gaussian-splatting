@@ -17,6 +17,8 @@ Needs few seconds to load splats.
 | cutoutEntity | selector to a box primitive that uses scale and position to define the bounds of splat points to render    |     |
 | pixelRatio | Pixel ratio for rendering. Reducing the value decreases the resolution and improves performance. If a negative value is set, the device's native value will be applied. |  1.0  |
 | xrPixelRatio | Same as pixelRatio. Applied to XR devices.  |  0.5   |
+| depthWrite | Force writing to the depth Buffer. This may help fixing occlusion issues  |  false   |
+| discardFilter | Value from 0 to 1, Discard splats blobs that are under a certain opacity (0 basically means no discarding). This may help fixing occlusion issues with Splats clarity tradeof.  |  0   |
 
 ### Example custom scan to gaussian splat workflow
 * Use a service such as https://lumalabs.ai/ to process a scan into splat (an alternative is https://poly.cam/)
