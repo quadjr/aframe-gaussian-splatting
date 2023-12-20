@@ -251,7 +251,6 @@ AFRAME.registerComponent("gaussian_splatting", {
 				await new Promise(resolve => setTimeout(resolve, 1000));
 				
 			}
-			console.log(data);
 			this.parseData(data,src);
 		}
 		catch (error) {
