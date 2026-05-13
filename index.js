@@ -242,15 +242,6 @@ AFRAME.registerComponent("gaussian_splatting", {
 			let glInitialized = false;
 			let bytesDownloaded = 0;
 			let bytesProcesses = 0;
-			let _totalDownloadBytes = data.headers.get("Content-Length");
-			let totalDownloadBytes = _totalDownloadBytes ? parseInt(_totalDownloadBytes) : undefined;
-
-			if(totalDownloadBytes != undefined){
-				let numVertexes = Math.floor(totalDownloadBytes / this.rowLength);
-				await this.initGL(numVertexes);
-				glInitialized = true;
-			}
-			
 			const chunks = [];
 			const start = Date.now();
 			let lastReportedProgress = 0;
@@ -264,38 +255,9 @@ AFRAME.registerComponent("gaussian_splatting", {
 						break;
 					}
 					bytesDownloaded += value.length;
-					if (totalDownloadBytes != undefined) {
-						const mbps = (bytesDownloaded / 1024 / 1024) / ((Date.now() - start) / 1000);
-						const percent = bytesDownloaded / totalDownloadBytes * 100;
-						if (percent - lastReportedProgress > 1) {
-							console.log("download progress:", percent.toFixed(2) + "%", mbps.toFixed(2) + " Mbps");
-							lastReportedProgress = percent;
-						}
-						} else {
-						console.log("download progress:", bytesDownloaded, ", unknown total");
-					}
 					chunks.push(value);
 
 					const bytesRemains = bytesDownloaded - bytesProcesses;
-					if(!isPly && totalDownloadBytes != undefined && bytesRemains > this.rowLength){
-						let vertexCount = Math.floor(bytesRemains / this.rowLength);
-						const concatenatedChunksbuffer = new Uint8Array(bytesRemains);
-						let offset = 0;
-						for (const chunk of chunks) {
-							concatenatedChunksbuffer.set(chunk, offset);
-							offset += chunk.length;
-						}
-						chunks.length = 0;
-						if(bytesRemains > vertexCount * this.rowLength){
-							const extra_data = new Uint8Array(bytesRemains - vertexCount * this.rowLength);
-							extra_data.set(concatenatedChunksbuffer.subarray(bytesRemains - extra_data.length, bytesRemains), 0);
-							chunks.push(extra_data);
-						}
-						const buffer = new Uint8Array(vertexCount * this.rowLength);
-						buffer.set(concatenatedChunksbuffer.subarray(0, buffer.byteLength), 0);
-						this.pushDataBuffer(buffer.buffer, vertexCount);
-						bytesProcesses += vertexCount * this.rowLength;
-					}
 				} catch (error) {
 				  console.error(error);
 				  break;
